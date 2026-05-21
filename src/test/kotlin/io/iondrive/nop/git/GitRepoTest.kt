@@ -89,6 +89,62 @@ class GitRepoTest {
     }
 
     @Test
+    fun `stash create then pop round-trips changes through the shelf`(@TempDir tmp: Path) {
+        runShell(tmp, "git init -q && git config user.email t@x && git config user.name T")
+        (tmp / "kept.txt").writeText("kept\n")
+        (tmp / "edit.txt").writeText("v1\n")
+        runShell(tmp, "git add -A && git commit -q -m init")
+
+        // Local change to stash
+        (tmp / "edit.txt").writeText("v2\n")
+        (tmp / "new.txt").writeText("untracked\n")
+
+        val repo = GitRepo.discover(tmp)!!
+        assertEquals(2, repo.loadStatus().changes.size, "dirty before stash")
+        val sha = repo.stashCreate("wip — local edit")
+        assertNotNull(sha)
+        assertTrue(repo.loadStatus().isClean, "clean after stash")
+
+        val shelf = repo.stashList()
+        assertEquals(1, shelf.size)
+        assertTrue(shelf[0].message.contains("wip"), "stash message preserved; got '${shelf[0].message}'")
+
+        repo.stashPop(shelf[0])
+        assertEquals(2, repo.loadStatus().changes.size, "changes restored after pop")
+        assertTrue(repo.stashList().isEmpty(), "shelf empty after pop")
+        repo.close()
+    }
+
+    @Test
+    fun `stash create with nothing to stash returns null`(@TempDir tmp: Path) {
+        runShell(tmp, "git init -q && git config user.email t@x && git config user.name T")
+        (tmp / "a.txt").writeText("a\n")
+        runShell(tmp, "git add -A && git commit -q -m init")
+
+        val repo = GitRepo.discover(tmp)!!
+        assertEquals(null, repo.stashCreate("nothing"), "no changes -> no stash")
+        repo.close()
+    }
+
+    @Test
+    fun `stash drop removes the entry without applying`(@TempDir tmp: Path) {
+        runShell(tmp, "git init -q && git config user.email t@x && git config user.name T")
+        (tmp / "a.txt").writeText("v1\n")
+        runShell(tmp, "git add -A && git commit -q -m init")
+        (tmp / "a.txt").writeText("v2\n")
+
+        val repo = GitRepo.discover(tmp)!!
+        repo.stashCreate("toss me")
+        val shelf = repo.stashList()
+        assertEquals(1, shelf.size)
+
+        repo.stashDrop(shelf[0])
+        assertTrue(repo.stashList().isEmpty(), "shelf empty after drop")
+        assertEquals("v1\n", (tmp / "a.txt").toFile().readText(), "drop should not restore the working tree")
+        repo.close()
+    }
+
+    @Test
     fun `clean repo reports no changes`(@TempDir tmp: Path) {
         runShell(tmp, "git init -q && git config user.email t@x && git config user.name T")
         (tmp / "a.txt").writeText("a\n")

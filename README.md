@@ -1,3 +1,3 @@
 # nop
 
-A tiny desktop git client focused on reviewing and committing changes against a local directory. Launch it against any folder (`./gradlew run --args="/path/to/dir"`); the left pane shows the file tree with per-file change indicators, the centre opens files and side-by-side diffs in tabs with word-level inline highlighting, and the bottom-right is a commit panel where you tick the changes to include, type a message, and commit. Built in Kotlin on Compose Desktop, talking to git through JGit and computing diffs with java-diff-utils. Run `./gradlew test` for the test suite or `./gradlew packageReleaseDistributionForCurrentOS` for a native installer.
+Desktop editor and change reviewer built on Jetbrains Compose

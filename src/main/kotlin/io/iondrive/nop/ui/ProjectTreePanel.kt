@@ -1,11 +1,15 @@
 package io.iondrive.nop.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.iondrive.nop.git.GitStatus
@@ -15,6 +19,7 @@ import org.jetbrains.jewel.foundation.lazy.tree.Tree
 import org.jetbrains.jewel.foundation.lazy.tree.buildTree
 import org.jetbrains.jewel.foundation.lazy.tree.rememberTreeState
 import org.jetbrains.jewel.ui.component.LazyTree
+import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import java.io.File
 import java.nio.file.Path
@@ -53,9 +58,11 @@ private fun File.relativePathTo(repoRoot: Path): String? = runCatching {
 fun ProjectTreePanel(
     projectPath: Path,
     status: GitStatus,
+    refreshKey: Int = 0,
     onFileClick: (File) -> Unit,
+    onChangeProject: () -> Unit = {},
 ) {
-    val tree = remember(projectPath) { projectPath.asFilteredTree() }
+    val tree = remember(projectPath, refreshKey) { projectPath.asFilteredTree() }
     val treeState = rememberTreeState()
     val rootId = remember(projectPath) { projectPath.toFile().absolutePath }
 
@@ -64,10 +71,16 @@ fun ProjectTreePanel(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
-        Text(
-            "Project",
-            modifier = Modifier.padding(start = 12.dp, bottom = 6.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Project", modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = onChangeProject) {
+                Text("Change…")
+            }
+        }
         LazyTree(
             tree = tree,
             treeState = treeState,

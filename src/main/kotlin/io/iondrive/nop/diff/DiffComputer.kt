@@ -1,6 +1,7 @@
 package io.iondrive.nop.diff
 
 import com.github.difflib.text.DiffRowGenerator
+import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 
 private const val OLD_OPEN = ""
 private const val OLD_CLOSE = ""
@@ -15,9 +16,13 @@ object DiffComputer {
         .newTag { isOpen -> if (isOpen) NEW_OPEN else NEW_CLOSE }
         .build()
 
-    fun compute(oldText: String, newText: String): DiffResult {
+    fun compute(oldText: String, newText: String, filePath: String? = null): DiffResult {
         val oldLines = oldText.splitLines()
         val newLines = newText.splitLines()
+
+        val syntax = filePath?.let(SyntaxHighlighter::syntaxFor) ?: SyntaxConstants.SYNTAX_STYLE_NONE
+        val oldTokens = SyntaxHighlighter.tokenizeByLine(oldText, syntax)
+        val newTokens = SyntaxHighlighter.tokenizeByLine(newText, syntax)
 
         val rawRows = generator.generateDiffRows(oldLines, newLines)
         val rows = ArrayList<DiffRow>(rawRows.size)
@@ -47,6 +52,8 @@ object DiffComputer {
                     newSpans = if (newHasContent) newSpans else emptyList(),
                     oldLineNumber = if (oldHasContent) oldLineNum else null,
                     newLineNumber = if (newHasContent) newLineNum else null,
+                    oldTokens = if (oldHasContent) oldTokens.getOrNull(oldLineNum - 1).orEmpty() else emptyList(),
+                    newTokens = if (newHasContent) newTokens.getOrNull(newLineNum - 1).orEmpty() else emptyList(),
                 ),
             )
 

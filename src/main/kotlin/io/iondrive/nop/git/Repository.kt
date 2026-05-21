@@ -29,6 +29,39 @@ class GitRepo(val rootDir: Path, private val repository: Repository) : AutoClose
         return commit.name
     }
 
+    /**
+     * Stash all uncommitted changes (including untracked) to the shelf.
+     * Returns the new stash SHA, or null if the working tree had nothing to stash.
+     */
+    fun stashCreate(message: String? = null): String? {
+        val cmd = git.stashCreate().setIncludeUntracked(true)
+        if (!message.isNullOrBlank()) cmd.setWorkingDirectoryMessage(message)
+        val commit = cmd.call() ?: return null
+        return commit.name
+    }
+
+    fun stashList(): List<StashEntry> =
+        git.stashList().call().mapIndexed { idx, c ->
+            StashEntry(index = idx, sha = c.name, message = c.shortMessage ?: "(no message)")
+        }
+
+    /** Apply a stash without removing it from the shelf. */
+    fun stashApply(entry: StashEntry) {
+        git.stashApply().setStashRef(entry.sha).call()
+    }
+
+    /** Apply a stash then drop it. */
+    fun stashPop(entry: StashEntry) {
+        // Apply first; if this throws (e.g., conflicts), keep the stash on the shelf
+        git.stashApply().setStashRef(entry.sha).call()
+        git.stashDrop().setStashRef(entry.index).call()
+    }
+
+    /** Drop a stash without applying. */
+    fun stashDrop(entry: StashEntry) {
+        git.stashDrop().setStashRef(entry.index).call()
+    }
+
     fun loadStatus(): GitStatus {
         val status = git.status().call()
         val changes = buildList {

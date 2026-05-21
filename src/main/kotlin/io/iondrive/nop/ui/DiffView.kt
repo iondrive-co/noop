@@ -1,17 +1,25 @@
 package io.iondrive.nop.ui
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -21,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -33,6 +42,8 @@ import io.iondrive.nop.diff.DiffResult
 import io.iondrive.nop.diff.DiffRow
 import io.iondrive.nop.diff.InlineSpan
 import io.iondrive.nop.diff.RowKind
+import io.iondrive.nop.diff.SyntaxHighlighter
+import io.iondrive.nop.diff.TokenSpan
 import io.iondrive.nop.git.ChangeKind
 import io.iondrive.nop.git.GitRepo
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +58,11 @@ private val EMPTY_BG = Color(0x14FFFFFF)  // subtle gray (filler for missing sid
 private val INLINE_WORD_BG = Color(0x66629755)
 private val INLINE_WORD_BG_OLD = Color(0x66B35E5E)
 private val GUTTER_FG = Color(0xFF808080)
+
+// Saturated marker colours for the scrollbar lane — must read at a glance on the dark panel.
+private val INSERT_MARK = Color(0xFF7DBE6E)
+private val DELETE_MARK = Color(0xFFD96B6B)
+private val CHANGE_MARK = Color(0xFF6FA8DC)
 
 @Composable
 fun DiffView(repo: GitRepo, tab: Tab.Diff) {
@@ -67,7 +83,7 @@ fun DiffView(repo: GitRepo, tab: Tab.Diff) {
                 }
                 o to n
             }
-            result = withContext(Dispatchers.Default) { DiffComputer.compute(old, new) }
+            result = withContext(Dispatchers.Default) { DiffComputer.compute(old, new, tab.change.path) }
             loading = false
         } catch (t: Throwable) {
             error = t.message ?: t::class.simpleName
@@ -89,8 +105,50 @@ fun DiffView(repo: GitRepo, tab: Tab.Diff) {
 @Composable
 private fun DiffRowsList(result: DiffResult) {
     val listState = rememberLazyListState()
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-        items(result.rows) { row -> DiffRowView(row) }
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(end = MARKER_LANE_W + SCROLLBAR_W),
+        ) {
+            items(result.rows) { row -> DiffRowView(row) }
+        }
+        // Marker lane sits just to the left of the scrollbar, so the markers stay readable
+        // even while the user is dragging the (translucent) scrollbar thumb across them.
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Canvas(Modifier.width(MARKER_LANE_W).fillMaxHeight()) {
+                drawChangeMarkers(result.rows)
+            }
+            VerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                style = NopScrollbarStyle,
+                modifier = Modifier.width(SCROLLBAR_W).fillMaxHeight(),
+            )
+        }
+    }
+}
+
+private val MARKER_LANE_W = 4.dp
+private val SCROLLBAR_W = 10.dp
+
+private fun DrawScope.drawChangeMarkers(rows: List<DiffRow>) {
+    val n = rows.size
+    if (n == 0) return
+    val markerH = (size.height / n).coerceAtLeast(3f)
+    val w = size.width
+    rows.forEachIndexed { idx, row ->
+        val color = when (row.kind) {
+            RowKind.EQUAL -> return@forEachIndexed
+            RowKind.INSERT -> INSERT_MARK
+            RowKind.DELETE -> DELETE_MARK
+            RowKind.CHANGE -> CHANGE_MARK
+        }
+        val y = (idx.toFloat() / n) * size.height
+        drawRect(color = color, topLeft = Offset(0f, y), size = Size(w, markerH))
     }
 }
 
@@ -105,6 +163,7 @@ private fun DiffRowView(row: DiffRow) {
         DiffHalf(
             text = row.oldLine,
             spans = row.oldSpans,
+            tokens = row.oldTokens,
             lineNumber = row.oldLineNumber,
             background = oldBg,
             inlineHighlight = INLINE_WORD_BG_OLD,
@@ -114,6 +173,7 @@ private fun DiffRowView(row: DiffRow) {
         DiffHalf(
             text = row.newLine,
             spans = row.newSpans,
+            tokens = row.newTokens,
             lineNumber = row.newLineNumber,
             background = newBg,
             inlineHighlight = INLINE_WORD_BG,
@@ -126,6 +186,7 @@ private fun DiffRowView(row: DiffRow) {
 private fun DiffHalf(
     text: String?,
     spans: List<InlineSpan>,
+    tokens: List<TokenSpan>,
     lineNumber: Int?,
     background: Color,
     inlineHighlight: Color,
@@ -144,7 +205,7 @@ private fun DiffHalf(
             modifier = Modifier.padding(horizontal = 6.dp),
         )
         Text(
-            text = annotateLine(text ?: "", spans, inlineHighlight),
+            text = annotateLine(text ?: "", spans, tokens, inlineHighlight),
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             softWrap = false,
@@ -153,16 +214,45 @@ private fun DiffHalf(
     }
 }
 
-private fun annotateLine(text: String, spans: List<InlineSpan>, highlightColor: Color): AnnotatedString {
-    if (spans.isEmpty()) return AnnotatedString(text)
+private fun annotateLine(
+    text: String,
+    inlineSpans: List<InlineSpan>,
+    tokens: List<TokenSpan>,
+    highlightColor: Color,
+): AnnotatedString {
+    if (text.isEmpty()) return AnnotatedString("")
+    if (inlineSpans.isEmpty() && tokens.isEmpty()) return AnnotatedString(text)
+
+    val n = text.length
+    val fg = IntArray(n) { SyntaxHighlighter.DEFAULT_FG.toArgb() }
+    val bg = IntArray(n) { 0 } // 0 == transparent — use Color.Transparent later
+
+    for (t in tokens) {
+        val start = t.startChar.coerceIn(0, n)
+        val end = t.endCharExclusive.coerceIn(0, n)
+        if (end <= start) continue
+        val color = SyntaxHighlighter.colorFor(t.tokenType).toArgb()
+        for (i in start until end) fg[i] = color
+    }
+    for (s in inlineSpans) {
+        if (!s.changed) continue
+        val start = s.startChar.coerceIn(0, n)
+        val end = s.endCharExclusive.coerceIn(0, n)
+        val color = highlightColor.toArgb()
+        for (i in start until end) bg[i] = color
+    }
+
     return buildAnnotatedString {
-        for (s in spans) {
-            val piece = text.substring(s.startChar.coerceAtMost(text.length), s.endCharExclusive.coerceAtMost(text.length))
-            if (s.changed) {
-                withStyle(SpanStyle(background = highlightColor)) { append(piece) }
-            } else {
-                append(piece)
-            }
+        var i = 0
+        while (i < n) {
+            var j = i + 1
+            while (j < n && fg[j] == fg[i] && bg[j] == bg[i]) j++
+            val style = SpanStyle(
+                color = Color(fg[i]),
+                background = if (bg[i] == 0) Color.Unspecified else Color(bg[i]),
+            )
+            withStyle(style) { append(text, i, j) }
+            i = j
         }
     }
 }

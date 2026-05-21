@@ -14,6 +14,13 @@ data class FileChange(
     val kind: ChangeKind,
 )
 
+/** One entry on the shelf — a stashed working-tree snapshot. */
+data class StashEntry(
+    val index: Int,
+    val sha: String,
+    val message: String,
+)
+
 data class GitStatus(
     val branch: String?,
     val changes: List<FileChange>,
