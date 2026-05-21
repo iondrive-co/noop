@@ -14,18 +14,16 @@ kotlin {
 
 dependencies {
     implementation("org.jetbrains.jewel:jewel-int-ui-standalone:0.34.0-253.32098.37")
-    implementation("com.jetbrains.intellij.platform:icons:253.32098.37")
-
     implementation(compose.desktop.currentOs) {
         exclude(group = "org.jetbrains.compose.material")
     }
 
     implementation("net.java.dev.jna:jna:5.17.0")
-    implementation("org.jetbrains.kotlin:kotlin-reflect:2.2.20")
-
-    implementation("org.eclipse.jgit:org.eclipse.jgit:7.1.0.202411261347-r")
+    implementation("org.eclipse.jgit:org.eclipse.jgit:7.1.1.202505221757-r")
     implementation("io.github.java-diff-utils:java-diff-utils:4.16")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
+    // Used only via the JsonElement API to parse package.json — no compiler plugin needed.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
@@ -49,6 +47,7 @@ compose.desktop {
             packageVersion = "0.1.0"
             description = "Desktop editor and change reviewer"
             vendor = "iondrive"
+            copyright = "Copyright (c) 2026 iondrive. All rights reserved."
 
             linux {
                 menuGroup = "Development"

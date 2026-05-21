@@ -47,6 +47,7 @@ fun LauncherButton(
     onRun: (Launcher) -> Unit,
     onAdd: (Launcher) -> Unit,
     onDelete: (Launcher) -> Unit,
+    readOnlyNames: Set<String> = emptySet(),
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -66,6 +67,7 @@ fun LauncherButton(
             ) {
                 LauncherMenu(
                     launchers = launchers,
+                    readOnlyNames = readOnlyNames,
                     onRun = { launcher ->
                         expanded = false
                         onRun(launcher)
@@ -95,6 +97,7 @@ fun LauncherButton(
 @Composable
 private fun LauncherMenu(
     launchers: List<Launcher>,
+    readOnlyNames: Set<String>,
     onRun: (Launcher) -> Unit,
     onAddRequest: () -> Unit,
     onDelete: (Launcher) -> Unit,
@@ -114,7 +117,12 @@ private fun LauncherMenu(
             )
         } else {
             for (launcher in launchers) {
-                LauncherRow(launcher = launcher, onRun = { onRun(launcher) }, onDelete = { onDelete(launcher) })
+                LauncherRow(
+                    launcher = launcher,
+                    readOnly = launcher.name in readOnlyNames,
+                    onRun = { onRun(launcher) },
+                    onDelete = { onDelete(launcher) },
+                )
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -125,7 +133,7 @@ private fun LauncherMenu(
 }
 
 @Composable
-private fun LauncherRow(launcher: Launcher, onRun: () -> Unit, onDelete: () -> Unit) {
+private fun LauncherRow(launcher: Launcher, readOnly: Boolean, onRun: () -> Unit, onDelete: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -148,7 +156,11 @@ private fun LauncherRow(launcher: Launcher, onRun: () -> Unit, onDelete: () -> U
                 )
             }
         }
-        OutlinedButton(onClick = onDelete) { Text("✕") }
+        // Auto-discovered launchers (e.g. from package.json) are not deletable here —
+        // remove the script from its source file instead.
+        if (!readOnly) {
+            OutlinedButton(onClick = onDelete) { Text("✕") }
+        }
     }
 }
 

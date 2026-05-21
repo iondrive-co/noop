@@ -18,6 +18,7 @@ import io.iondrive.nop.git.StashEntry
 import io.iondrive.nop.launchers.Launcher
 import io.iondrive.nop.launchers.LauncherRun
 import io.iondrive.nop.launchers.LauncherStore
+import io.iondrive.nop.launchers.discoverLaunchers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,12 +79,21 @@ fun App(projectPath: Path, onChangeProject: () -> Unit = {}) {
 
     val rootPath = repo?.rootDir ?: projectPath
     val launcherStore = remember(rootPath) { LauncherStore(rootPath) }
-    var launchers by remember(rootPath) { mutableStateOf<List<Launcher>>(emptyList()) }
-    LaunchedEffect(launcherStore) {
-        launchers = withContext(Dispatchers.IO) { launcherStore.load() }
+    var stored by remember(rootPath) { mutableStateOf<List<Launcher>>(emptyList()) }
+    var discovered by remember(rootPath) { mutableStateOf<List<Launcher>>(emptyList()) }
+    // Re-key on fsRefreshKey so edits to package.json show up after the next refresh.
+    LaunchedEffect(launcherStore, fsRefreshKey) {
+        stored = withContext(Dispatchers.IO) { launcherStore.load() }
+        discovered = withContext(Dispatchers.IO) { discoverLaunchers(rootPath) }
     }
+    val storedNames = stored.map { it.name }.toSet()
+    // A stored launcher with the same name wins, so the user can override a discovered entry
+    // (e.g. add a stored "npm: build" with a customized command) without it being duplicated.
+    val launchers = stored + discovered.filterNot { it.name in storedNames }
+    val readOnlyNames = discovered.map { it.name }.toSet() - storedNames
+
     fun persistLaunchers(next: List<Launcher>) {
-        launchers = next
+        stored = next
         scope.launch { withContext(Dispatchers.IO) { launcherStore.save(next) } }
         // The launchers file is itself version controlled — show it as a change immediately.
         refresh()
@@ -137,13 +147,14 @@ fun App(projectPath: Path, onChangeProject: () -> Unit = {}) {
                     headerExtras = {
                         LauncherButton(
                             launchers = launchers,
+                            readOnlyNames = readOnlyNames,
                             onRun = { launcher ->
                                 val run = LauncherRun(launcher, rootPath.toFile())
                                 tabsState.open(Tab.LauncherOutput(run))
                                 run.start()
                             },
-                            onAdd = { persistLaunchers(launchers + it) },
-                            onDelete = { persistLaunchers(launchers - it) },
+                            onAdd = { persistLaunchers(stored + it) },
+                            onDelete = { persistLaunchers(stored - it) },
                         )
                     },
                 )

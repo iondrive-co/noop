@@ -1,5 +1,6 @@
 package io.iondrive.nop.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path as ComposePath
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -24,20 +32,24 @@ import org.jetbrains.jewel.foundation.lazy.tree.ChildrenGeneratorScope
 import org.jetbrains.jewel.foundation.lazy.tree.Tree
 import org.jetbrains.jewel.foundation.lazy.tree.buildTree
 import org.jetbrains.jewel.foundation.lazy.tree.rememberTreeState
-import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.IconButton
 import org.jetbrains.jewel.ui.component.LazyTree
 import org.jetbrains.jewel.ui.component.Text
+import org.jetbrains.jewel.ui.component.styling.LazyTreeIcons
+import org.jetbrains.jewel.ui.component.styling.LazyTreeStyle
+import org.jetbrains.jewel.ui.component.styling.LocalLazyTreeStyle
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import java.io.File
 import java.nio.file.Path
 
-// Icons from the bundled IntelliJ Platform icons jar.
-// Jewel automatically picks the _dark variant when running under the dark theme.
-private val OpenFolderIconKey = PathIconKey("expui/general/open.svg", ProjectTreePanelClass::class.java)
-private val HistoryIconKey = PathIconKey("expui/general/history.svg", ProjectTreePanelClass::class.java)
+private val ProjectIconTint = Color(0xFFAFB8C4)
 
-private object ProjectTreePanelClass
+// Jewel's LazyTree resolves its default chevrons through the IntelliJ Platform icons
+// jar, which we don't depend on. Point it at bundled SVGs instead so folder rows
+// don't render as magenta missing-icon placeholders.
+private object ProjectIconsClass
+private val ChevronCollapsedIconKey = PathIconKey("icons/chevron-right.svg", ProjectIconsClass::class.java)
+private val ChevronExpandedIconKey = PathIconKey("icons/chevron-down.svg", ProjectIconsClass::class.java)
 
 private val IGNORED_DIR_NAMES = setOf(
     ".git", ".idea", ".gradle", ".vscode",
@@ -95,6 +107,24 @@ fun ProjectTreePanel(
         return File(key).takeIf { it.exists() }
     }
 
+    // History falls back to the project root so the button can show whole-repo log
+    // when nothing (or the root itself) is selected.
+    fun historyTarget(): File = selectedFile() ?: projectPath.toFile()
+
+    val baseTreeStyle = LocalLazyTreeStyle.current
+    val treeStyle = remember(baseTreeStyle) {
+        LazyTreeStyle(
+            colors = baseTreeStyle.colors,
+            metrics = baseTreeStyle.metrics,
+            icons = LazyTreeIcons(
+                chevronCollapsed = ChevronCollapsedIconKey,
+                chevronExpanded = ChevronExpandedIconKey,
+                chevronSelectedCollapsed = ChevronCollapsedIconKey,
+                chevronSelectedExpanded = ChevronExpandedIconKey,
+            ),
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, bottom = 6.dp),
@@ -103,22 +133,10 @@ fun ProjectTreePanel(
         ) {
             Text("Project")
             IconButton(onClick = onChangeProject) {
-                Icon(
-                    key = OpenFolderIconKey,
-                    contentDescription = "Change project",
-                    modifier = Modifier.size(16.dp),
-                )
+                Canvas(Modifier.size(16.dp)) { drawOpenFolderIcon() }
             }
-            val historyTarget = selectedFile()
-            IconButton(
-                onClick = { historyTarget?.let(onHistoryRequest) },
-                enabled = historyTarget != null,
-            ) {
-                Icon(
-                    key = HistoryIconKey,
-                    contentDescription = "Show history for selected entry",
-                    modifier = Modifier.size(16.dp),
-                )
+            IconButton(onClick = { onHistoryRequest(historyTarget()) }) {
+                Canvas(Modifier.size(16.dp)) { drawHistoryIcon() }
             }
             // Push headerExtras (the launcher ▶) to the far right
             androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
@@ -127,11 +145,12 @@ fun ProjectTreePanel(
         LazyTree(
             tree = tree,
             treeState = treeState,
+            style = treeStyle,
             modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.Delete -> selectedFile()?.let { onDeleteRequest(it); true } ?: false
-                    Key.H -> selectedFile()?.let { onHistoryRequest(it); true } ?: false
+                    Key.H -> { onHistoryRequest(historyTarget()); true }
                     else -> false
                 }
             },
@@ -151,4 +170,76 @@ fun ProjectTreePanel(
             if (color != null) Text(file.name, color = color) else Text(file.name)
         }
     }
+}
+
+private fun DrawScope.drawOpenFolderIcon() {
+    val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(1.5f, 4.5f)
+            lineTo(5.95f, 4.5f)
+            lineTo(7.08f, 5.62f)
+            lineTo(13f, 5.62f)
+            lineTo(13.5f, 6.12f)
+            lineTo(13.5f, 6.9f)
+            lineTo(2.5f, 6.9f)
+            close()
+        },
+        color = ProjectIconTint,
+        style = stroke,
+    )
+
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(1.5f, 6.5f)
+            lineTo(14.5f, 6.5f)
+            lineTo(13.45f, 11.74f)
+            cubicTo(13.31f, 12.44f, 12.7f, 12.95f, 11.98f, 12.95f)
+            lineTo(3.38f, 12.95f)
+            cubicTo(2.66f, 12.95f, 2.04f, 12.44f, 1.91f, 11.73f)
+            close()
+        },
+        color = ProjectIconTint,
+        style = stroke,
+    )
+}
+
+private fun DrawScope.drawHistoryIcon() {
+    val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(4.05f, 5.35f)
+            lineTo(1.85f, 5.35f)
+            lineTo(1.85f, 3.15f)
+        },
+        color = ProjectIconTint,
+        style = stroke,
+    )
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(2.15f, 8.1f)
+            cubicTo(2.15f, 4.87f, 4.77f, 2.25f, 8f, 2.25f)
+            cubicTo(11.23f, 2.25f, 13.85f, 4.87f, 13.85f, 8.1f)
+            cubicTo(13.85f, 11.33f, 11.23f, 13.95f, 8f, 13.95f)
+            cubicTo(5.36f, 13.95f, 3.11f, 12.18f, 2.39f, 9.75f)
+        },
+        color = ProjectIconTint,
+        style = stroke,
+    )
+    drawLine(
+        color = ProjectIconTint,
+        start = Offset(8f, 4.75f),
+        end = Offset(8f, 8f),
+        strokeWidth = 1.3f,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = ProjectIconTint,
+        start = Offset(8f, 8f),
+        end = Offset(10.25f, 9.35f),
+        strokeWidth = 1.3f,
+        cap = StrokeCap.Round,
+    )
 }
