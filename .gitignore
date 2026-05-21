@@ -1,0 +1,33 @@
+# Gradle / Kotlin build output
+/.gradle/
+/.kotlin/
+/build/
+
+# IDE / editor scratch
+.idea/
+*.iml
+.vscode/
+.fleet/
+.cursor/
+out/
+*.swp
+*~
+
+# Local config not committed
+/local.properties
+
+# Test / dev artefacts
+/screenshots/
+*.log
+*.tmp
+*.bak
+
+# JVM crash dumps
+hs_err_pid*.log
+replay_pid*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+.directory
