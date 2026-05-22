@@ -3,6 +3,7 @@ package iondrive.nop
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 
 data class WindowGeometry(
     val width: Int,
@@ -179,5 +180,22 @@ object Settings {
         val map = load()
         map["theme"] = if (dark) "dark" else "light"
         save(map)
+    }
+
+    /**
+     * Per-project scratch directory under the nop config root. Used for derived data we don't
+     * want to spray into the project itself — currently just the symbol index. Two projects
+     * with the same final path segment (e.g. two `frontend/` checkouts) get separate dirs
+     * because the suffix is derived from the full absolute path.
+     */
+    fun projectDataDir(projectPath: Path): Path {
+        val abs = projectPath.toAbsolutePath().normalize().toString()
+        val digest = MessageDigest.getInstance("SHA-1").digest(abs.toByteArray())
+        val short = digest.joinToString("") { "%02x".format(it) }.take(10)
+        val safeName = projectPath.fileName?.toString()
+            ?.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            ?.takeIf { it.isNotEmpty() }
+            ?: "project"
+        return configRoot.resolve("nop").resolve("projects").resolve("$safeName-$short")
     }
 }

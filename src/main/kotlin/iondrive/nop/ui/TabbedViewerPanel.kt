@@ -15,25 +15,35 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import iondrive.nop.git.GitRepo
+import iondrive.nop.index.JumpTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.withContext
+import java.io.File
 import org.jetbrains.jewel.foundation.ExperimentalJewelApi
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.HorizontalSplitLayout
@@ -63,6 +73,8 @@ fun TabbedViewerPanel(
     repo: GitRepo?,
     editStore: FileEditStore,
     onFileSaved: () -> Unit = {},
+    onResolveAt: (currentFile: File, text: String, offset: Int) -> JumpTarget? = { _, _, _ -> null },
+    onJump: (File, Int) -> Unit = { _, _ -> },
 ) {
     val selected = tabsState.selectedTab
 
@@ -106,10 +118,19 @@ fun TabbedViewerPanel(
         Box(modifier = Modifier.fillMaxSize()) {
             when (val current = selected) {
                 is Tab.FileView -> {
+                    val pendingLine = tabsState.pendingJumpLine(current.id)
                     if (current.file.extension.equals("md", ignoreCase = true)) {
                         MarkdownEditWithPreview(current, editStore, onFileSaved)
                     } else {
-                        FileEditView(current, editStore, onFileSaved)
+                        FileEditView(
+                            tab = current,
+                            store = editStore,
+                            onSaved = onFileSaved,
+                            onResolveAt = { text, offset -> onResolveAt(current.file, text, offset) },
+                            onJump = onJump,
+                            pendingLine = pendingLine,
+                            onPendingLineConsumed = { tabsState.clearJumpLine(current.id) },
+                        )
                     }
                 }
                 is Tab.Diff -> if (repo != null) DiffView(repo, current)
@@ -139,12 +160,19 @@ private fun FileEditView(
     tab: Tab.FileView,
     store: FileEditStore,
     onSaved: () -> Unit,
+    onResolveAt: (text: String, offset: Int) -> JumpTarget? = { _, _ -> null },
+    onJump: (File, Int) -> Unit = { _, _ -> },
+    pendingLine: Int? = null,
+    onPendingLineConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val edit = remember(tab.id) { store.edit(tab) }
     val focusRequester = remember(tab.id) { FocusRequester() }
     val scrollState = rememberScrollState()
     val savedCallback by rememberUpdatedState(onSaved)
+    val resolveCallback by rememberUpdatedState(onResolveAt)
+    val jumpCallback by rememberUpdatedState(onJump)
+    val pendingConsumedCallback by rememberUpdatedState(onPendingLineConsumed)
 
     // We intentionally do NOT requestFocus() on tab activation. Keeping focus on the tree means
     // tree-bound shortcuts (Delete to remove the file, H to view history) keep working after the
@@ -171,6 +199,25 @@ private fun FileEditView(
     val tokenize = remember(tab.id) { tokenizerForExtension(tab.file.extension) }
     val transformation = remember(tokenize, palette) { tokenize?.let { highlightTransformation(it, palette) } }
 
+    // We keep the text layout around so Ctrl-click can map mouse coordinates to text offsets,
+    // and so an inbound jump request can scroll a target line to the top of the viewport.
+    var layout by remember(tab.id) { mutableStateOf<TextLayoutResult?>(null) }
+
+    // Inbound jump: once the layout for this tab exists, scroll the requested line to ~3 lines
+    // below the top so the user can see context around the landing site. Also drop the cursor
+    // at the line start so the visual anchor is obvious.
+    LaunchedEffect(tab.id, layout, pendingLine) {
+        val tl = layout ?: return@LaunchedEffect
+        val line = pendingLine ?: return@LaunchedEffect
+        val safe = (line - 1).coerceIn(0, maxOf(0, tl.lineCount - 1))
+        val lineHeight = (tl.getLineBottom(0) - tl.getLineTop(0)).coerceAtLeast(1f)
+        val targetTop = (tl.getLineTop(safe) - lineHeight * 3).toInt().coerceAtLeast(0)
+        scrollState.scrollTo(targetTop)
+        val lineStart = tl.getLineStart(safe)
+        edit.state.edit { selection = TextRange(lineStart) }
+        pendingConsumedCallback()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -182,7 +229,27 @@ private fun FileEditView(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(end = 12.dp)
-                .focusRequester(focusRequester),
+                .focusRequester(focusRequester)
+                // Ctrl-click → jump-to-source. We run on the Initial pass and consume the change
+                // when we have a target, so the field doesn't also move the cursor to the click
+                // site. Bare clicks fall through unchanged and place the cursor as usual.
+                .pointerInput(tab.id) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type != PointerEventType.Press) continue
+                            if (!event.keyboardModifiers.isCtrlPressed) continue
+                            val change = event.changes.firstOrNull() ?: continue
+                            val tl = layout ?: continue
+                            val offset = tl.getOffsetForPosition(change.position)
+                            val target = resolveCallback(edit.state.text.toString(), offset)
+                            if (target != null) {
+                                change.consume()
+                                jumpCallback(target.file, target.line)
+                            }
+                        }
+                    }
+                },
             textStyle = TextStyle(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 13.sp,
@@ -192,6 +259,10 @@ private fun FileEditView(
             lineLimits = TextFieldLineLimits.MultiLine(),
             scrollState = scrollState,
             outputTransformation = transformation,
+            onTextLayout = { getResult ->
+                val r = getResult()
+                if (r != null) layout = r
+            },
         )
         VerticalScrollbar(
             adapter = rememberScrollbarAdapter(scrollState),

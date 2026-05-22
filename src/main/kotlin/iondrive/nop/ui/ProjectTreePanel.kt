@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -28,6 +29,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import iondrive.nop.git.GitStatus
 import org.jetbrains.jewel.foundation.ExperimentalJewelApi
+import org.jetbrains.jewel.foundation.InternalJewelApi
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.foundation.lazy.tree.ChildrenGeneratorScope
 import org.jetbrains.jewel.foundation.lazy.tree.Tree
@@ -78,12 +80,41 @@ private fun ChildrenGeneratorScope<File>.addChildren(dir: File) {
         }
 }
 
+private fun visibleChildren(dir: File): List<File> = (dir.listFiles() ?: emptyArray())
+    .filter { it.name !in IGNORED_DIR_NAMES && !it.isHidden }
+    .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+
+/**
+ * Returns the 0-based row index of [targetPath] in the same DFS-of-expanded-nodes ordering the
+ * LazyTree uses, given [openIds] (absolute paths of directories that are expanded). Returns -1
+ * when the target isn't part of the visible tree, e.g. because an ancestor isn't open.
+ */
+internal fun flattenedRowIndexOf(rootFile: File, targetPath: String, openIds: Set<String>): Int {
+    var counter = 0
+    fun walk(file: File): Int {
+        if (file.absolutePath == targetPath) return counter
+        counter++
+        if (!file.isDirectory) return -1
+        if (file.absolutePath != rootFile.absolutePath && file.absolutePath !in openIds) return -1
+        for (child in visibleChildren(file)) {
+            val found = walk(child)
+            if (found >= 0) return found
+        }
+        return -1
+    }
+    return walk(rootFile)
+}
+
 private fun File.relativePathTo(repoRoot: Path): String? = runCatching {
     repoRoot.toAbsolutePath().normalize().relativize(this.toPath().toAbsolutePath().normalize())
         .toString().replace(File.separatorChar, '/')
 }.getOrNull()?.takeIf { !it.startsWith("..") }
 
-@OptIn(ExperimentalJewelApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(
+    ExperimentalJewelApi::class,
+    InternalJewelApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
 @Composable
 fun ProjectTreePanel(
     projectPath: Path,
@@ -108,7 +139,8 @@ fun ProjectTreePanel(
     }
 
     // When the active tab changes, expand ancestors and select the matching node so the tree
-    // mirrors the currently-viewed file.
+    // mirrors the currently-viewed file. If the selected row is offscreen (typical after a
+    // Ctrl-click jump into a deeply nested role), also scroll it into view.
     LaunchedEffect(revealFile, projectPath) {
         val f = revealFile ?: return@LaunchedEffect
         val rootFile = projectPath.toFile().absoluteFile
@@ -126,6 +158,27 @@ fun ProjectTreePanel(
         }
         treeState.openNodes(ancestors)
         treeState.selectedKeys = setOf(target.absolutePath)
+
+        // Walk the same filtered tree the UI renders to find the row index of the target.
+        // The LazyTree's internal node list isn't part of its public API, so we rebuild the
+        // flattened order from the filesystem + the set of open node IDs.
+        val openIds = treeState.openNodes.filterIsInstance<String>().toSet() + rootFile.absolutePath
+        val targetIndex = flattenedRowIndexOf(rootFile, target.absolutePath, openIds)
+        if (targetIndex >= 0) {
+            // Yield one frame so the LazyList re-measures with the newly-opened ancestors —
+            // otherwise visibleItemsInfo still reflects the pre-expansion layout and we'd
+            // scroll unnecessarily.
+            withFrameNanos { }
+            val lazyList = treeState.lazyListState.lazyListState
+            val info = lazyList.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == targetIndex }
+            val fullyVisible = item != null &&
+                item.offset >= info.viewportStartOffset &&
+                item.offset + item.size <= info.viewportEndOffset
+            if (!fullyVisible) {
+                lazyList.animateScrollToItem(targetIndex)
+            }
+        }
     }
 
     fun selectedFile(): File? {

@@ -2,6 +2,7 @@ package iondrive.nop.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import iondrive.nop.git.FileChange
@@ -44,6 +45,11 @@ class TabsState {
     var selectedId: String? by mutableStateOf(null)
         private set
 
+    // 1-based line numbers to scroll to the next time a tab is composed. Cleared by the consumer
+    // via [consumeJumpLine]. We keep this off [Tab.FileView] so the tab identity stays stable —
+    // jumping to a different line in an already-open file shouldn't open a second tab.
+    private val pendingJumpLines = mutableStateMapOf<String, Int>()
+
     fun open(tab: Tab) {
         if (_tabs.none { it.id == tab.id }) {
             _tabs.add(tab)
@@ -51,10 +57,28 @@ class TabsState {
         selectedId = tab.id
     }
 
+    /** Opens [tab] and queues a one-shot scroll to [line] (1-based) once the editor is laid out. */
+    fun openAt(tab: Tab, line: Int) {
+        open(tab)
+        pendingJumpLines[tab.id] = line.coerceAtLeast(1)
+    }
+
+    /**
+     * Pending 1-based line number to scroll to for [tabId], or null. Reads off observable state
+     * so a Compose call site re-runs when [openAt] queues a new jump for an already-open tab.
+     */
+    fun pendingJumpLine(tabId: String): Int? = pendingJumpLines[tabId]
+
+    /** Marks the pending jump for [tabId] as handled. Call after the scroll/select has run. */
+    fun clearJumpLine(tabId: String) {
+        pendingJumpLines.remove(tabId)
+    }
+
     fun close(id: String) {
         val idx = _tabs.indexOfFirst { it.id == id }
         if (idx < 0) return
         _tabs.removeAt(idx)
+        pendingJumpLines.remove(id)
         if (selectedId == id) {
             selectedId = _tabs.getOrNull(idx)?.id ?: _tabs.getOrNull(idx - 1)?.id
         }

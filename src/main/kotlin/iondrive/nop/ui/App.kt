@@ -21,6 +21,9 @@ import iondrive.nop.Settings
 import iondrive.nop.git.GitRepo
 import iondrive.nop.git.GitStatus
 import iondrive.nop.git.StashEntry
+import iondrive.nop.index.Indexer
+import iondrive.nop.index.JumpResolver
+import iondrive.nop.index.SymbolIndex
 import iondrive.nop.launchers.Launcher
 import iondrive.nop.launchers.LauncherRun
 import iondrive.nop.launchers.LauncherStore
@@ -105,6 +108,18 @@ fun App(
     }
 
     val rootPath = repo?.rootDir ?: projectPath
+    // Jump-to-source index: load the previous run's cache for instant clicks while we rebuild,
+    // then swap in the fresh version (and persist it) once the walk finishes. The index lives
+    // under ~/.config/nop/projects/<slug>/ so the project tree stays free of derived files.
+    var symbolIndex by remember(rootPath) { mutableStateOf(SymbolIndex()) }
+    LaunchedEffect(rootPath) {
+        val indexFile = Settings.projectDataDir(rootPath).resolve("index.tsv")
+        val cached = withContext(Dispatchers.IO) { SymbolIndex.load(indexFile) }
+        if (cached.size > 0) symbolIndex = cached
+        val fresh = withContext(Dispatchers.IO) { Indexer.build(rootPath) }
+        symbolIndex = fresh
+        withContext(Dispatchers.IO) { SymbolIndex.save(indexFile, fresh) }
+    }
     val launcherStore = remember(rootPath) { LauncherStore(rootPath) }
     var stored by remember(rootPath) { mutableStateOf<List<Launcher>>(emptyList()) }
     var discovered by remember(rootPath) { mutableStateOf<List<Launcher>>(emptyList()) }
@@ -218,6 +233,18 @@ fun App(
                                 repo = repo,
                                 editStore = editStore,
                                 onFileSaved = ::refresh,
+                                onResolveAt = { currentFile, text, offset ->
+                                    JumpResolver.resolve(
+                                        symbolIndex,
+                                        rootPath.toFile(),
+                                        currentFile,
+                                        text,
+                                        offset,
+                                    )
+                                },
+                                onJump = { file, line ->
+                                    tabsState.openAt(Tab.FileView(file), line)
+                                },
                             )
                         },
                         second = {

@@ -16,11 +16,13 @@ You must build on a Mac (jpackage can't cross-compile).
 `build\compose\binaries\main\msi\`; double-click it to install. You must build on
 Windows.
 
-## Project tree shortcuts
+## Shortcuts
 
-Select a file or directory in the tree, then:
+Select a file or directory in the project tree, then:
 - `Delete` — remove it from disk (asks for confirmation first)
 - `H` — open a tab showing its git history
+
+Ctrl click on an element in a file to jump to source.
 
 <!-- screenshot -->
 ![Diff view](docs/screenshots/latest-diff.png)
