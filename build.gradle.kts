@@ -35,6 +35,11 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // After tests pass, refresh the deployed jar that the desktop launcher points at. Skipping
+    // this step has bitten us — code under test would change but the menu icon still ran the
+    // stale jar from build/compose/binaries/main/app/nop/. Up-to-date checks make this a ~1s
+    // no-op when nothing has changed.
+    finalizedBy("installDesktopEntry")
 }
 
 compose.desktop {

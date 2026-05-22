@@ -36,6 +36,7 @@ import org.jetbrains.jewel.foundation.lazy.tree.rememberTreeState
 import org.jetbrains.jewel.ui.component.IconButton
 import org.jetbrains.jewel.ui.component.LazyTree
 import org.jetbrains.jewel.ui.component.Text
+import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.component.styling.LazyTreeIcons
 import org.jetbrains.jewel.ui.component.styling.LazyTreeStyle
 import org.jetbrains.jewel.ui.component.styling.LocalLazyTreeStyle
@@ -82,7 +83,7 @@ private fun File.relativePathTo(repoRoot: Path): String? = runCatching {
         .toString().replace(File.separatorChar, '/')
 }.getOrNull()?.takeIf { !it.startsWith("..") }
 
-@OptIn(ExperimentalJewelApi::class)
+@OptIn(ExperimentalJewelApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ProjectTreePanel(
     projectPath: Path,
@@ -93,6 +94,7 @@ fun ProjectTreePanel(
     onToggleTheme: () -> Unit = {},
     onDeleteRequest: (File) -> Unit = {},
     onHistoryRequest: (File) -> Unit = {},
+    onOpenInSystem: (File) -> Unit = ::openInSystem,
     headerExtras: @Composable () -> Unit = {},
 ) {
     val tree = remember(projectPath, refreshKey) { projectPath.asFilteredTree() }
@@ -113,6 +115,10 @@ fun ProjectTreePanel(
     // History falls back to the project root so the button can show whole-repo log
     // when nothing (or the root itself) is selected.
     fun historyTarget(): File = selectedFile() ?: projectPath.toFile()
+
+    // For "open in system": the user is most likely targeting whatever they've picked in the
+    // tree, but fall back to the project root so the button always does something useful.
+    fun systemOpenTarget(): File = selectedFile() ?: projectPath.toFile()
 
     val baseTreeStyle = LocalLazyTreeStyle.current
     val treeStyle = remember(baseTreeStyle) {
@@ -137,15 +143,28 @@ fun ProjectTreePanel(
             val isDark = JewelTheme.isDark
             val tint = if (isDark) ProjectIconTintDark else ProjectIconTintLight
             Text("Project")
-            IconButton(onClick = onChangeProject) {
-                Canvas(Modifier.size(16.dp)) { drawOpenFolderIcon(tint) }
+            Tooltip(tooltip = { Text("Open another project in a new window") }) {
+                IconButton(onClick = onChangeProject) {
+                    Canvas(Modifier.size(16.dp)) { drawOpenFolderIcon(tint) }
+                }
             }
-            IconButton(onClick = { onHistoryRequest(historyTarget()) }) {
-                Canvas(Modifier.size(16.dp)) { drawHistoryIcon(tint) }
+            Tooltip(tooltip = {
+                Text("Open selected with the system default app")
+            }) {
+                IconButton(onClick = { onOpenInSystem(systemOpenTarget()) }) {
+                    Canvas(Modifier.size(16.dp)) { drawExternalOpenIcon(tint) }
+                }
             }
-            IconButton(onClick = onToggleTheme) {
-                Canvas(Modifier.size(16.dp)) {
-                    if (isDark) drawSunIcon(tint) else drawMoonIcon(tint)
+            Tooltip(tooltip = { Text("Show git history for the selected file (H)") }) {
+                IconButton(onClick = { onHistoryRequest(historyTarget()) }) {
+                    Canvas(Modifier.size(16.dp)) { drawHistoryIcon(tint) }
+                }
+            }
+            Tooltip(tooltip = { Text(if (isDark) "Switch to light theme" else "Switch to dark theme") }) {
+                IconButton(onClick = onToggleTheme) {
+                    Canvas(Modifier.size(16.dp)) {
+                        if (isDark) drawSunIcon(tint) else drawMoonIcon(tint)
+                    }
                 }
             }
             // Push headerExtras (the launcher ▶) to the far right
@@ -182,6 +201,45 @@ fun ProjectTreePanel(
     }
 }
 
+/**
+ * Hands the target off to the OS:
+ * - Regular files: through java.awt.Desktop, which on Linux means xdg-open and honours the
+ *   user's per-MIME defaults (image viewer for PNGs, editor for source files, etc).
+ * - Directories on Linux: through the freedesktop FileManager1 DBus interface, which talks
+ *   to whichever file manager the desktop has registered (Thunar, Nautilus, Dolphin, …).
+ *   We deliberately skip xdg-open here because users can accidentally set inode/directory to
+ *   a non-file-manager (the canonical accident: "Open with → some app, always") and then every
+ *   folder click in the system tries to launch a music player. FileManager1 ignores that
+ *   mapping. macOS/Windows fall back to Desktop.open, which already does the right thing.
+ *
+ * Done on a daemon thread so the UI doesn't stall while the JVM forks dbus-send / xdg-open
+ * (which on a heap-heavy Compose process can take several seconds to copy the page table).
+ * Best-effort — failures are swallowed since there's nothing useful to surface from a
+ * header icon.
+ */
+fun openInSystem(target: File) {
+    Thread {
+        if (target.isDirectory && System.getProperty("os.name").lowercase().contains("linux")) {
+            if (openDirectoryViaFileManager1(target)) return@Thread
+        }
+        runCatching { java.awt.Desktop.getDesktop().open(target) }
+    }.apply { name = "nop-open-in-system"; isDaemon = true }.start()
+}
+
+private fun openDirectoryViaFileManager1(dir: File): Boolean {
+    val uri = dir.toURI().toString()
+    val cmd = listOf(
+        "dbus-send", "--session", "--dest=org.freedesktop.FileManager1", "--type=method_call",
+        "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowFolders",
+        "array:string:$uri", "string:",
+    )
+    return runCatching {
+        // dbus-send exits 0 when the call dispatched successfully, including when DBus
+        // auto-starts Thunar/Nautilus/etc. to handle it.
+        ProcessBuilder(cmd).redirectErrorStream(true).start().waitFor() == 0
+    }.getOrDefault(false)
+}
+
 private fun DrawScope.drawOpenFolderIcon(tint: Color) {
     val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
 
@@ -209,6 +267,41 @@ private fun DrawScope.drawOpenFolderIcon(tint: Color) {
             lineTo(3.38f, 12.95f)
             cubicTo(2.66f, 12.95f, 2.04f, 12.44f, 1.91f, 11.73f)
             close()
+        },
+        color = tint,
+        style = stroke,
+    )
+}
+
+// "Open externally" — a rounded box with an arrow leaving the top-right corner. Conveys
+// "hand this off to something outside the app".
+private fun DrawScope.drawExternalOpenIcon(tint: Color) {
+    val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    // Box: open at the top-right corner where the arrow exits.
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(8.5f, 3f)
+            lineTo(3f, 3f)
+            lineTo(3f, 13f)
+            lineTo(13f, 13f)
+            lineTo(13f, 7.5f)
+        },
+        color = tint,
+        style = stroke,
+    )
+    // Arrow shaft (diagonal) + head.
+    drawLine(
+        color = tint,
+        start = Offset(8f, 8f),
+        end = Offset(13.5f, 2.5f),
+        strokeWidth = 1.3f,
+        cap = StrokeCap.Round,
+    )
+    drawPath(
+        path = ComposePath().apply {
+            moveTo(9.5f, 2.5f)
+            lineTo(13.5f, 2.5f)
+            lineTo(13.5f, 6.5f)
         },
         color = tint,
         style = stroke,

@@ -1,4 +1,4 @@
-# noop
+# nop
 
 Minimalist cross platform editor and change reviewer built on Jetbrains Compose
 

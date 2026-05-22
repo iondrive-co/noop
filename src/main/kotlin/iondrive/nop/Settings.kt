@@ -13,8 +13,12 @@ data class WindowGeometry(
 
 /**
  * Tiny persistent settings stored at $XDG_CONFIG_HOME/nop/state (default ~/.config/nop/state)
- * as a key=value file. Backward compatible with the original single-line "just a project path"
- * format — if the file has no '=' lines, the first non-blank line is treated as the project path.
+ * as a key=value file.
+ *
+ * Open projects are stored as `open.0=…`, `open.1=…`, etc. Backward compatible with:
+ *   - the original single-line "just a project path" format
+ *   - the previous single-project `project=…` key
+ * Both fall back into the open-projects list when no `open.N` entries are present.
  */
 object Settings {
     /** Overridable for tests; defaults to XDG_CONFIG_HOME (or ~/.config). */
@@ -60,14 +64,33 @@ object Settings {
         }
     }
 
-    fun loadLastProject(): Path? {
-        val raw = load()["project"]?.takeIf { it.isNotBlank() } ?: return null
-        return runCatching { Paths.get(raw) }.getOrNull()
+    fun loadOpenProjects(): List<Path> {
+        val map = load()
+        // Prefer the new numbered open.N keys, preserving order.
+        val numbered = map.entries
+            .mapNotNull { (k, v) ->
+                val idx = k.removePrefix("open.").toIntOrNull()?.takeIf { k.startsWith("open.") }
+                if (idx == null) null else idx to v
+            }
+            .filter { it.second.isNotBlank() }
+            .sortedBy { it.first }
+            .mapNotNull { runCatching { Paths.get(it.second) }.getOrNull() }
+
+        if (numbered.isNotEmpty()) return numbered
+
+        // Fall back to the legacy single-project key.
+        val legacy = map["project"]?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return listOfNotNull(runCatching { Paths.get(legacy) }.getOrNull())
     }
 
-    fun saveLastProject(path: Path) {
+    fun saveOpenProjects(paths: List<Path>) {
         val map = load()
-        map["project"] = path.toAbsolutePath().normalize().toString()
+        // Drop any pre-existing open.* and the legacy project key, then write the new list.
+        map.keys.filter { it.startsWith("open.") }.toList().forEach(map::remove)
+        map.remove("project")
+        paths.forEachIndexed { idx, p ->
+            map["open.$idx"] = p.toAbsolutePath().normalize().toString()
+        }
         save(map)
     }
 
