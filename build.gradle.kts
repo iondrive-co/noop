@@ -1,4 +1,10 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.awt.AlphaComposite
+import java.awt.Color
+import java.awt.Font
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 plugins {
     kotlin("jvm") version "2.2.20"
@@ -49,6 +55,7 @@ compose.desktop {
             languageVersion = JavaLanguageVersion.of(21)
         }.get().metadata.installationPath.asFile.absolutePath
 
+
         nativeDistributions {
             targetFormats(TargetFormat.AppImage, TargetFormat.Deb, TargetFormat.Dmg, TargetFormat.Msi)
             // JGit's WindowCache publishes a JMX MBean on first use, so the jlinked runtime
@@ -90,13 +97,61 @@ tasks.register("installDesktopEntry") {
     val distDir = layout.buildDirectory.dir("compose/binaries/main/app/nop")
     val home = System.getProperty("user.home")
     val desktopFile = file("$home/.local/share/applications/iondrive.nop.desktop")
+    // Install at multiple sizes under the hicolor theme so GNOME / KDE / XFCE icon caches can
+    // pick the right one. Most desktops look up Icon=iondrive.nop here first; an absolute path
+    // in the .desktop entry works as a fallback for the launchers that don't follow the spec.
+    val iconSizes = listOf(48, 64, 128, 256)
+    val themedIcons = iconSizes.map { size ->
+        size to file("$home/.local/share/icons/hicolor/${size}x${size}/apps/iondrive.nop.png")
+    }
+    val fallbackIcon = file("$home/.local/share/icons/iondrive.nop.png")
 
     inputs.dir(distDir)
-    outputs.file(desktopFile)
+    outputs.files(desktopFile, fallbackIcon, *themedIcons.map { it.second }.toTypedArray())
 
     doLast {
+        // Draw the "n" tile at each requested size in a neutral grey, so the launcher icon
+        // exists even before any project window picks its tint. Per-window icons override at
+        // runtime via Window(icon = …). Java2D keeps this self-contained.
+        fun renderTile(size: Int): BufferedImage {
+            val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+            val g = img.createGraphics()
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+                g.composite = AlphaComposite.Src
+                g.color = Color(0, 0, 0, 0)
+                g.fillRect(0, 0, size, size)
+                g.color = Color(0x4F, 0x55, 0x66)
+                val arc = size / 5
+                g.fillRoundRect(0, 0, size, size, arc, arc)
+                g.color = Color(0xF7, 0xF8, 0xFA)
+                g.font = Font(Font.SANS_SERIF, Font.BOLD, (size * 0.72f).toInt())
+                val fm = g.fontMetrics
+                val txt = "n"
+                val tx = (size - fm.stringWidth(txt)) / 2
+                val ty = (size - fm.height) / 2 + fm.ascent - (size / 24)
+                g.drawString(txt, tx, ty)
+            } finally {
+                g.dispose()
+            }
+            return img
+        }
+
+        for ((size, file) in themedIcons) {
+            file.parentFile.mkdirs()
+            ImageIO.write(renderTile(size), "PNG", file)
+        }
+        fallbackIcon.parentFile.mkdirs()
+        ImageIO.write(renderTile(128), "PNG", fallbackIcon)
+
         desktopFile.parentFile.mkdirs()
         val bin = distDir.get().asFile.resolve("bin/nop")
+        // Icon= uses the icon-theme name (iondrive.nop); launchers resolve it against the
+        // hicolor PNGs above. StartupWMClass must match the actual WM_CLASS the running window
+        // advertises — Compose Desktop / Skiko derive that from the JVM main class name and we
+        // have no Java-side hook to override before the X11 toolkit caches it, so we mirror the
+        // generated value here rather than try to rename it.
         desktopFile.writeText(
             """
             [Desktop Entry]
@@ -105,12 +160,25 @@ tasks.register("installDesktopEntry") {
             GenericName=Desktop editor
             Comment=Desktop editor and change reviewer
             Exec=${bin.absolutePath} %F
+            Icon=iondrive.nop
             Terminal=false
             Categories=Development;TextEditor;
-            StartupWMClass=nop
+            StartupWMClass=iondrive-nop-MainKt
             """.trimIndent() + "\n",
         )
+        // Best-effort cache refresh so newly-installed icons + .desktop are visible without
+        // having to log out. Both tools are widely available; failures are ignored.
+        listOf(
+            listOf("update-desktop-database", "$home/.local/share/applications"),
+            listOf("gtk-update-icon-cache", "-f", "-t", "$home/.local/share/icons/hicolor"),
+        ).forEach { cmd ->
+            runCatching {
+                ProcessBuilder(cmd).redirectErrorStream(true).start().waitFor()
+            }
+        }
         println("Wrote ${desktopFile.absolutePath} -> ${bin.absolutePath}")
+        for ((_, f) in themedIcons) println("Wrote ${f.absolutePath}")
+        println("Wrote ${fallbackIcon.absolutePath}")
     }
 }
 

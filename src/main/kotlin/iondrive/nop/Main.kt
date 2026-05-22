@@ -17,6 +17,8 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import iondrive.nop.ui.App
+import iondrive.nop.ui.projectTint
+import iondrive.nop.ui.projectWindowIcon
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
@@ -44,6 +46,21 @@ fun main(args: Array<String>) {
         // When the list empties we exit. Using a state list so Compose recomposes on changes.
         val openProjects = remember { mutableStateListOf<Path>().apply { addAll(initial) } }
         var darkMode by remember { mutableStateOf(Settings.loadDarkMode()) }
+        var recentProjects by remember { mutableStateOf(Settings.loadRecentProjects()) }
+
+        // Seed the recents list with whatever we just opened, so the dropdown is populated on a
+        // brand-new install too. Reversed so the very first entry ends up at the top.
+        LaunchedEffect(Unit) {
+            for (p in initial.reversed()) Settings.addRecentProject(p)
+            recentProjects = Settings.loadRecentProjects()
+        }
+
+        fun openProject(path: Path) {
+            val norm = path.toAbsolutePath().normalize()
+            if (norm !in openProjects) openProjects.add(norm)
+            Settings.addRecentProject(norm)
+            recentProjects = Settings.loadRecentProjects()
+        }
 
         LaunchedEffect(Unit) {
             // Never persist an empty list: when the user closes the last window we want the
@@ -62,11 +79,10 @@ fun main(args: Array<String>) {
                 projectPath = projectPath,
                 isFirstWindow = index == 0,
                 darkMode = darkMode,
-                onPickAnotherProject = {
-                    pickProjectDir(initial = projectPath.toFile())?.let { picked ->
-                        // Avoid opening a duplicate window for an already-open project.
-                        if (picked !in openProjects) openProjects.add(picked)
-                    }
+                recentProjects = recentProjects,
+                onPickRecent = ::openProject,
+                onPickNew = {
+                    pickProjectDir(initial = projectPath.toFile())?.let(::openProject)
                 },
                 onToggleTheme = { darkMode = !darkMode },
                 onCloseWindow = {
@@ -84,7 +100,9 @@ private fun ApplicationScope.ProjectWindow(
     projectPath: Path,
     isFirstWindow: Boolean,
     darkMode: Boolean,
-    onPickAnotherProject: () -> Unit,
+    recentProjects: List<Path>,
+    onPickRecent: (Path) -> Unit,
+    onPickNew: () -> Unit,
     onToggleTheme: () -> Unit,
     onCloseWindow: () -> Unit,
 ) {
@@ -121,10 +139,18 @@ private fun ApplicationScope.ProjectWindow(
         }
     }
 
+    // Per-window icon tinted from the project path — gives each project a recognisable colour in
+    // the taskbar/dock instead of every nop window looking identical. The tint matches the in-app
+    // identity strip, and is recomputed on theme flip so the icon stays legible.
+    val windowIcon = remember(projectPath, darkMode) {
+        projectWindowIcon(projectTint(projectPath, isDark = darkMode))
+    }
+
     Window(
         state = windowState,
         onCloseRequest = onCloseWindow,
-        title = "nop — ${projectPath.fileName}",
+        title = projectPath.fileName.toString(),
+        icon = windowIcon,
     ) {
         IntUiTheme(
             theme = if (darkMode) JewelTheme.darkThemeDefinition() else JewelTheme.lightThemeDefinition(),
@@ -132,7 +158,9 @@ private fun ApplicationScope.ProjectWindow(
         ) {
             App(
                 projectPath = projectPath,
-                onChangeProject = onPickAnotherProject,
+                recentProjects = recentProjects,
+                onPickRecent = onPickRecent,
+                onPickNew = onPickNew,
                 onToggleTheme = onToggleTheme,
             )
         }

@@ -2,7 +2,11 @@ package iondrive.nop.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -11,7 +15,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import iondrive.nop.Settings
 import iondrive.nop.git.GitRepo
 import iondrive.nop.git.GitStatus
 import iondrive.nop.git.StashEntry
@@ -20,19 +26,23 @@ import iondrive.nop.launchers.LauncherRun
 import iondrive.nop.launchers.LauncherStore
 import iondrive.nop.launchers.discoverLaunchers
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.foundation.theme.JewelTheme
-import org.jetbrains.jewel.ui.component.HorizontalSplitLayout
-import org.jetbrains.jewel.ui.component.VerticalSplitLayout
-import org.jetbrains.jewel.ui.component.rememberSplitLayoutState
 import java.io.File
 import java.nio.file.Path
 
+@OptIn(FlowPreview::class)
 @Composable
 fun App(
     projectPath: Path,
-    onChangeProject: () -> Unit = {},
+    recentProjects: List<Path> = emptyList(),
+    onPickRecent: (Path) -> Unit = {},
+    onPickNew: () -> Unit = {},
     onToggleTheme: () -> Unit = {},
 ) {
     val repo: GitRepo? = remember(projectPath) { GitRepo.discover(projectPath) }
@@ -52,6 +62,19 @@ fun App(
     val tabsState = remember(projectPath) { TabsState() }
     val editStore = remember(projectPath) { FileEditStore() }
     val scope = rememberCoroutineScope()
+
+    // Split ratios are persisted globally (not per-project): the layout preference is about the
+    // user's preferred shape of the app, not the specific repo. Load once at composition start;
+    // unsaved values fall back to the original defaults.
+    val savedRatios = remember { Settings.loadSplitRatios() }
+    var hRatio by remember { mutableStateOf(savedRatios.horizontal ?: 0.22f) }
+    var vRatio by remember { mutableStateOf(savedRatios.vertical ?: 0.55f) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { hRatio to vRatio }
+            .debounce(500)
+            .distinctUntilChanged()
+            .collectLatest { (h, v) -> Settings.saveSplitRatios(h, v) }
+    }
 
     suspend fun reloadStatus() {
         if (repo != null) {
@@ -133,127 +156,153 @@ fun App(
         }
     }
 
+    // Sync the active tab's underlying file back into the tree so the sidebar always shows
+    // which file the user is currently looking at.
+    val revealFile: File? = when (val t = tabsState.selectedTab) {
+        is Tab.FileView -> t.file
+        is Tab.Diff -> File(t.repoRoot, t.change.path)
+        is Tab.History -> t.file
+        is Tab.LauncherOutput, null -> null
+    }
+
+    val tintColor = projectTint(rootPath, JewelTheme.isDark)
+
     Box(
         modifier = Modifier.fillMaxSize().background(JewelTheme.globalColors.panelBackground),
     ) {
-        HorizontalSplitLayout(
-            first = {
-                ProjectTreePanel(
-                    projectPath = rootPath,
-                    status = status,
-                    refreshKey = fsRefreshKey,
-                    onFileClick = { tabsState.open(Tab.FileView(it)) },
-                    onChangeProject = onChangeProject,
-                    onToggleTheme = onToggleTheme,
-                    onDeleteRequest = { pendingDelete = it },
-                    onHistoryRequest = { file ->
-                        if (repo != null) tabsState.open(Tab.History(file, repo.rootDir.toFile()))
-                    },
-                    headerExtras = {
-                        LauncherButton(
-                            launchers = launchers,
-                            readOnlyNames = readOnlyNames,
-                            onRun = { launcher ->
-                                val run = LauncherRun(launcher, rootPath.toFile())
-                                tabsState.open(Tab.LauncherOutput(run))
-                                run.start()
-                            },
-                            onAdd = { persistLaunchers(stored + it) },
-                            onDelete = { persistLaunchers(stored - it) },
-                        )
-                    },
-                )
-            },
-            second = {
-                VerticalSplitLayout(
-                    first = {
-                        TabbedViewerPanel(
-                            tabsState = tabsState,
-                            repo = repo,
-                            editStore = editStore,
-                            onFileSaved = ::refresh,
-                        )
-                    },
-                    second = {
-                        CommitPanel(
-                            status = status,
-                            stashes = stashes,
-                            selectedPaths = selectedPaths,
-                            onToggle = { path ->
-                                selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
-                            },
-                            onChangeClick = { change ->
-                                if (repo != null) {
-                                    tabsState.open(Tab.Diff(change, repo.rootDir.toFile()))
-                                }
-                            },
-                            onCommit = { message, included ->
-                                if (repo != null && !commitInFlight) {
-                                    scope.launch {
-                                        commitInFlight = true
-                                        try {
-                                            withContext(Dispatchers.IO) {
-                                                repo.stageAndCommit(message, included)
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Project-identity strip: a subtle band tinted from the project path's hash, so two
+            // windows on different projects look visually distinct at a glance.
+            Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(tintColor))
+            HorizontalSplit(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                ratio = hRatio,
+                onRatioChange = { hRatio = it },
+                first = {
+                    ProjectTreePanel(
+                        projectPath = rootPath,
+                        status = status,
+                        refreshKey = fsRefreshKey,
+                        revealFile = revealFile,
+                        recentProjects = recentProjects,
+                        onFileClick = { tabsState.open(Tab.FileView(it)) },
+                        onPickRecent = onPickRecent,
+                        onPickNew = onPickNew,
+                        onDeleteRequest = { pendingDelete = it },
+                        onHistoryRequest = { file ->
+                            if (repo != null) tabsState.open(Tab.History(file, repo.rootDir.toFile()))
+                        },
+                        headerExtras = {
+                            LauncherButton(
+                                launchers = launchers,
+                                readOnlyNames = readOnlyNames,
+                                onRun = { launcher ->
+                                    val run = LauncherRun(launcher, rootPath.toFile())
+                                    tabsState.open(Tab.LauncherOutput(run))
+                                    run.start()
+                                },
+                                onAdd = { persistLaunchers(stored + it) },
+                                onDelete = { persistLaunchers(stored - it) },
+                            )
+                        },
+                    )
+                },
+                second = {
+                    VerticalSplit(
+                        modifier = Modifier.fillMaxSize(),
+                        ratio = vRatio,
+                        onRatioChange = { vRatio = it },
+                        first = {
+                            TabbedViewerPanel(
+                                tabsState = tabsState,
+                                repo = repo,
+                                editStore = editStore,
+                                onFileSaved = ::refresh,
+                            )
+                        },
+                        second = {
+                            CommitPanel(
+                                status = status,
+                                stashes = stashes,
+                                selectedPaths = selectedPaths,
+                                onToggle = { path ->
+                                    selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
+                                },
+                                onChangeClick = { change ->
+                                    if (repo != null) {
+                                        tabsState.open(Tab.Diff(change, repo.rootDir.toFile()))
+                                    }
+                                },
+                                onCommit = { message, included ->
+                                    if (repo != null && !commitInFlight) {
+                                        scope.launch {
+                                            commitInFlight = true
+                                            try {
+                                                withContext(Dispatchers.IO) {
+                                                    repo.stageAndCommit(message, included)
+                                                }
+                                                reloadStatus()
+                                            } finally {
+                                                commitInFlight = false
                                             }
-                                            reloadStatus()
-                                        } finally {
-                                            commitInFlight = false
                                         }
                                     }
-                                }
-                            },
-                            onStash = { message ->
-                                if (repo != null && !stashInFlight) {
-                                    scope.launch {
-                                        stashInFlight = true
-                                        try {
-                                            withContext(Dispatchers.IO) {
-                                                repo.stashCreate(message.ifBlank { null })
+                                },
+                                onStash = { message ->
+                                    if (repo != null && !stashInFlight) {
+                                        scope.launch {
+                                            stashInFlight = true
+                                            try {
+                                                withContext(Dispatchers.IO) {
+                                                    repo.stashCreate(message.ifBlank { null })
+                                                }
+                                                reloadStatus()
+                                            } finally {
+                                                stashInFlight = false
                                             }
-                                            reloadStatus()
-                                        } finally {
-                                            stashInFlight = false
                                         }
                                     }
-                                }
-                            },
-                            onPopStash = { entry ->
-                                if (repo != null && !stashInFlight) {
-                                    scope.launch {
-                                        stashInFlight = true
-                                        try {
-                                            withContext(Dispatchers.IO) { repo.stashPop(entry) }
-                                            reloadStatus()
-                                        } finally {
-                                            stashInFlight = false
+                                },
+                                onPopStash = { entry ->
+                                    if (repo != null && !stashInFlight) {
+                                        scope.launch {
+                                            stashInFlight = true
+                                            try {
+                                                withContext(Dispatchers.IO) { repo.stashPop(entry) }
+                                                reloadStatus()
+                                            } finally {
+                                                stashInFlight = false
+                                            }
                                         }
                                     }
-                                }
-                            },
-                            onDropStash = { entry ->
-                                if (repo != null && !stashInFlight) {
-                                    scope.launch {
-                                        stashInFlight = true
-                                        try {
-                                            withContext(Dispatchers.IO) { repo.stashDrop(entry) }
-                                            reloadStatus()
-                                        } finally {
-                                            stashInFlight = false
+                                },
+                                onDropStash = { entry ->
+                                    if (repo != null && !stashInFlight) {
+                                        scope.launch {
+                                            stashInFlight = true
+                                            try {
+                                                withContext(Dispatchers.IO) { repo.stashDrop(entry) }
+                                                reloadStatus()
+                                            } finally {
+                                                stashInFlight = false
+                                            }
                                         }
                                     }
-                                }
-                            },
-                            commitInFlight = commitInFlight,
-                            stashInFlight = stashInFlight,
-                            refreshing = refreshing,
-                            onRefresh = ::refresh,
-                        )
-                    },
-                    state = rememberSplitLayoutState(0.55f),
-                )
-            },
-            state = rememberSplitLayoutState(0.22f),
-            modifier = Modifier.fillMaxSize(),
+                                },
+                                commitInFlight = commitInFlight,
+                                stashInFlight = stashInFlight,
+                                refreshing = refreshing,
+                                onRefresh = ::refresh,
+                            )
+                        },
+                    )
+                },
+            )
+        }
+
+        ThemeToggleButton(
+            onToggle = onToggleTheme,
+            modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd),
         )
 
         pendingDelete?.let { target ->

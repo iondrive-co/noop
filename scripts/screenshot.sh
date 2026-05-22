@@ -42,14 +42,13 @@ park_cursor() {
     DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$X" "$Y"
 }
 
-# Header icons run along the top of the tree panel at fixed offsets, irrespective of
-# window size: Project label, then folder / history / theme buttons spaced ~30px apart.
-# If you reorder ProjectTreePanel's header buttons, update theme_x here.
-icon_y=$((Y + 22))
-theme_x=$((X + 140))
+# The theme toggle floats at the bottom-right of the window, with ~8dp padding inside
+# the IconButton itself. ~18px in from each edge lands on its hit box at default scale.
+theme_x=$((X + WIDTH - 18))
+theme_y=$((Y + HEIGHT - 18))
 
 click_theme_toggle() {
-    DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$theme_x" "$icon_y" click 1
+    DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$theme_x" "$theme_y" click 1
     park_cursor
     # The IntUi theme swap involves a recomposition + style cache rebuild — give Skia a
     # few frames to settle so we don't snap a half-repainted intermediate.

@@ -106,4 +106,89 @@ class SettingsTest {
         Settings.saveOpenProjects(listOf(tmp.resolve("project").also { Files.createDirectories(it) }))
         assertNull(Settings.loadWindowGeometry())
     }
+
+    @Test
+    fun `recent projects round-trip in saved order`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val a = tmp.resolve("a").also { Files.createDirectories(it) }
+        val b = tmp.resolve("b").also { Files.createDirectories(it) }
+        Settings.saveRecentProjects(listOf(a, b))
+        assertEquals(
+            listOf(a, b).map { it.toAbsolutePath().normalize() },
+            Settings.loadRecentProjects(),
+        )
+    }
+
+    @Test
+    fun `addRecentProject prepends and dedupes`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val a = tmp.resolve("a").also { Files.createDirectories(it) }
+        val b = tmp.resolve("b").also { Files.createDirectories(it) }
+        Settings.addRecentProject(a)
+        Settings.addRecentProject(b)
+        // Re-adding `a` should move it to the front, not duplicate.
+        Settings.addRecentProject(a)
+        assertEquals(
+            listOf(a, b).map { it.toAbsolutePath().normalize() },
+            Settings.loadRecentProjects(),
+        )
+    }
+
+    @Test
+    fun `addRecentProject caps the list at ten`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val dirs = (0 until 15).map { i ->
+            tmp.resolve("p$i").also { Files.createDirectories(it) }
+        }
+        for (d in dirs) Settings.addRecentProject(d)
+
+        val loaded = Settings.loadRecentProjects()
+        assertEquals(10, loaded.size, "should cap at 10, got ${loaded.size}")
+        // Most-recently-added is first; earliest entries fell off.
+        assertEquals(dirs.last().toAbsolutePath().normalize(), loaded.first())
+        assertEquals(dirs[5].toAbsolutePath().normalize(), loaded.last())
+    }
+
+    @Test
+    fun `loadSplitRatios returns nulls when nothing is saved`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val r = Settings.loadSplitRatios()
+        assertNull(r.horizontal)
+        assertNull(r.vertical)
+    }
+
+    @Test
+    fun `split ratios round-trip`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        Settings.saveSplitRatios(horizontal = 0.31f, vertical = 0.42f)
+        val r = Settings.loadSplitRatios()
+        assertEquals(0.31f, r.horizontal)
+        assertEquals(0.42f, r.vertical)
+    }
+
+    @Test
+    fun `loadSplitRatios rejects out-of-range values`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val state = tmp.resolve("nop/state").also {
+            Files.createDirectories(it.parent)
+            Files.writeString(it, "split.h=1.5\nsplit.v=-0.2\n")
+        }
+        val r = Settings.loadSplitRatios()
+        assertNull(r.horizontal, "h=1.5 should be rejected")
+        assertNull(r.vertical, "v=-0.2 should be rejected")
+    }
+
+    @Test
+    fun `saving recent projects does not clobber open projects or window geometry`(@TempDir tmp: Path) {
+        Settings.configRoot = tmp
+        val proj = tmp.resolve("project").also { Files.createDirectories(it) }
+        val a = tmp.resolve("a").also { Files.createDirectories(it) }
+        Settings.saveOpenProjects(listOf(proj))
+        Settings.saveWindowGeometry(WindowGeometry(800, 600, 0, 0))
+        Settings.addRecentProject(a)
+
+        assertEquals(listOf(proj.toAbsolutePath().normalize()), Settings.loadOpenProjects())
+        assertEquals(WindowGeometry(800, 600, 0, 0), Settings.loadWindowGeometry())
+        assertEquals(listOf(a.toAbsolutePath().normalize()), Settings.loadRecentProjects())
+    }
 }

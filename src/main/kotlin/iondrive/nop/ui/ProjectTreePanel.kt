@@ -44,8 +44,8 @@ import org.jetbrains.jewel.ui.icon.PathIconKey
 import java.io.File
 import java.nio.file.Path
 
-private val ProjectIconTintDark = Color(0xFFAFB8C4)
-private val ProjectIconTintLight = Color(0xFF4A5360)
+internal val ProjectIconTintDark = Color(0xFFAFB8C4)
+internal val ProjectIconTintLight = Color(0xFF4A5360)
 
 // Jewel's LazyTree resolves its default chevrons through the IntelliJ Platform icons
 // jar, which we don't depend on. Point it at bundled SVGs instead so folder rows
@@ -89,9 +89,11 @@ fun ProjectTreePanel(
     projectPath: Path,
     status: GitStatus,
     refreshKey: Int = 0,
+    revealFile: File? = null,
+    recentProjects: List<Path> = emptyList(),
     onFileClick: (File) -> Unit,
-    onChangeProject: () -> Unit = {},
-    onToggleTheme: () -> Unit = {},
+    onPickRecent: (Path) -> Unit = {},
+    onPickNew: () -> Unit = {},
     onDeleteRequest: (File) -> Unit = {},
     onHistoryRequest: (File) -> Unit = {},
     onOpenInSystem: (File) -> Unit = ::openInSystem,
@@ -103,6 +105,27 @@ fun ProjectTreePanel(
 
     LaunchedEffect(rootId) {
         treeState.openNodes(listOf(rootId))
+    }
+
+    // When the active tab changes, expand ancestors and select the matching node so the tree
+    // mirrors the currently-viewed file.
+    LaunchedEffect(revealFile, projectPath) {
+        val f = revealFile ?: return@LaunchedEffect
+        val rootFile = projectPath.toFile().absoluteFile
+        val target = f.absoluteFile
+        if (target.path != rootFile.path &&
+            !target.path.startsWith(rootFile.path + File.separator)) {
+            return@LaunchedEffect
+        }
+        val ancestors = mutableListOf<String>()
+        var cur: File? = target.parentFile
+        while (cur != null) {
+            ancestors += cur.absolutePath
+            if (cur.absolutePath == rootFile.absolutePath) break
+            cur = cur.parentFile
+        }
+        treeState.openNodes(ancestors)
+        treeState.selectedKeys = setOf(target.absolutePath)
     }
 
     fun selectedFile(): File? {
@@ -143,11 +166,13 @@ fun ProjectTreePanel(
             val isDark = JewelTheme.isDark
             val tint = if (isDark) ProjectIconTintDark else ProjectIconTintLight
             Text("Project")
-            Tooltip(tooltip = { Text("Open another project in a new window") }) {
-                IconButton(onClick = onChangeProject) {
-                    Canvas(Modifier.size(16.dp)) { drawOpenFolderIcon(tint) }
-                }
-            }
+            RecentProjectsDropdown(
+                recentProjects = recentProjects,
+                currentProject = projectPath,
+                onPickRecent = onPickRecent,
+                onPickNew = onPickNew,
+                tint = tint,
+            )
             Tooltip(tooltip = {
                 Text("Open selected with the system default app")
             }) {
@@ -158,13 +183,6 @@ fun ProjectTreePanel(
             Tooltip(tooltip = { Text("Show git history for the selected file (H)") }) {
                 IconButton(onClick = { onHistoryRequest(historyTarget()) }) {
                     Canvas(Modifier.size(16.dp)) { drawHistoryIcon(tint) }
-                }
-            }
-            Tooltip(tooltip = { Text(if (isDark) "Switch to light theme" else "Switch to dark theme") }) {
-                IconButton(onClick = onToggleTheme) {
-                    Canvas(Modifier.size(16.dp)) {
-                        if (isDark) drawSunIcon(tint) else drawMoonIcon(tint)
-                    }
                 }
             }
             // Push headerExtras (the launcher ▶) to the far right
@@ -240,7 +258,7 @@ private fun openDirectoryViaFileManager1(dir: File): Boolean {
     }.getOrDefault(false)
 }
 
-private fun DrawScope.drawOpenFolderIcon(tint: Color) {
+internal fun DrawScope.drawOpenFolderIcon(tint: Color) {
     val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
 
     drawPath(
@@ -347,43 +365,3 @@ private fun DrawScope.drawHistoryIcon(tint: Color) {
     )
 }
 
-// Sun: shown when the app is dark (clicking switches to light).
-private fun DrawScope.drawSunIcon(tint: Color) {
-    val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    drawCircle(color = tint, radius = 2.6f, center = Offset(8f, 8f), style = stroke)
-    // Eight rays at the cardinal/diagonal directions.
-    val rays = listOf(
-        0f to -5.4f, 0f to 5.4f, -5.4f to 0f, 5.4f to 0f,
-        -3.8f to -3.8f, 3.8f to -3.8f, -3.8f to 3.8f, 3.8f to 3.8f,
-    )
-    for ((dx, dy) in rays) {
-        val inner = 1.4f / kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-        val outer = 0.6f
-        drawLine(
-            color = tint,
-            start = Offset(8f + dx * (1f - outer * 0.18f), 8f + dy * (1f - outer * 0.18f)),
-            end = Offset(8f + dx * (1f - inner * 0.6f), 8f + dy * (1f - inner * 0.6f)),
-            strokeWidth = 1.3f,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-// Moon: shown when the app is light (clicking switches to dark).
-private fun DrawScope.drawMoonIcon(tint: Color) {
-    val stroke = Stroke(width = 1.3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    // Crescent: full circle minus an offset bite. We approximate with a single concave path.
-    drawPath(
-        path = ComposePath().apply {
-            // Start at top-right, sweep around to bottom-right via the outer disk.
-            moveTo(10.5f, 2.5f)
-            cubicTo(7.5f, 3f, 5f, 5.6f, 5f, 8.8f)
-            cubicTo(5f, 12.2f, 7.8f, 14.5f, 10.5f, 14f)
-            cubicTo(8.4f, 13.1f, 7f, 11.1f, 7f, 8.6f)
-            cubicTo(7f, 6.1f, 8.4f, 4.1f, 10.5f, 2.5f)
-            close()
-        },
-        color = tint,
-        style = stroke,
-    )
-}

@@ -11,6 +11,8 @@ data class WindowGeometry(
     val y: Int?,
 )
 
+data class SplitRatios(val horizontal: Float?, val vertical: Float?)
+
 /**
  * Tiny persistent settings stored at $XDG_CONFIG_HOME/nop/state (default ~/.config/nop/state)
  * as a key=value file.
@@ -94,6 +96,38 @@ object Settings {
         save(map)
     }
 
+    /** Most-recently-opened first. */
+    fun loadRecentProjects(): List<Path> {
+        val map = load()
+        return map.entries
+            .mapNotNull { (k, v) ->
+                val idx = if (k.startsWith("recent.")) k.removePrefix("recent.").toIntOrNull() else null
+                if (idx == null) null else idx to v
+            }
+            .filter { it.second.isNotBlank() }
+            .sortedBy { it.first }
+            .mapNotNull { runCatching { Paths.get(it.second) }.getOrNull() }
+    }
+
+    fun saveRecentProjects(paths: List<Path>) {
+        val map = load()
+        map.keys.filter { it.startsWith("recent.") }.toList().forEach(map::remove)
+        paths.take(RECENT_PROJECTS_CAP).forEachIndexed { idx, p ->
+            map["recent.$idx"] = p.toAbsolutePath().normalize().toString()
+        }
+        save(map)
+    }
+
+    /** Bumps [path] to the top of the recents list, deduping by absolute/normalized path. */
+    fun addRecentProject(path: Path) {
+        val norm = path.toAbsolutePath().normalize()
+        val current = loadRecentProjects().map { it.toAbsolutePath().normalize() }
+        val next = (listOf(norm) + current.filter { it != norm }).take(RECENT_PROJECTS_CAP)
+        saveRecentProjects(next)
+    }
+
+    private const val RECENT_PROJECTS_CAP = 10
+
     fun loadWindowGeometry(): WindowGeometry? {
         val map = load()
         val w = map["window.width"]?.toIntOrNull() ?: return null
@@ -113,6 +147,25 @@ object Settings {
         map["window.height"] = g.height.toString()
         if (g.x != null) map["window.x"] = g.x.toString() else map.remove("window.x")
         if (g.y != null) map["window.y"] = g.y.toString() else map.remove("window.y")
+        save(map)
+    }
+
+    /**
+     * Loads the persisted divider ratios for the two splits. Null entries mean the user hasn't
+     * dragged that divider yet, so callers should fall back to a sensible default.
+     */
+    fun loadSplitRatios(): SplitRatios {
+        val map = load()
+        return SplitRatios(
+            horizontal = map["split.h"]?.toFloatOrNull()?.takeIf { it in 0f..1f },
+            vertical = map["split.v"]?.toFloatOrNull()?.takeIf { it in 0f..1f },
+        )
+    }
+
+    fun saveSplitRatios(horizontal: Float, vertical: Float) {
+        val map = load()
+        map["split.h"] = horizontal.toString()
+        map["split.v"] = vertical.toString()
         save(map)
     }
 
