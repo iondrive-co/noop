@@ -17,6 +17,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.text.input.TextFieldState
 import iondrive.nop.Settings
 import iondrive.nop.git.GitRepo
 import iondrive.nop.git.GitStatus
@@ -50,6 +51,7 @@ fun App(
     onPickNew: () -> Unit = {},
     onToggleTheme: () -> Unit = {},
     fileSearchTrigger: Int = 0,
+    findInFilesTrigger: Int = 0,
 ) {
     val repo: GitRepo? = remember(projectPath) { GitRepo.discover(projectPath) }
     DisposableEffect(repo) { onDispose { repo?.close() } }
@@ -162,6 +164,19 @@ fun App(
     // so the dialog doesn't pop on first composition.
     LaunchedEffect(fileSearchTrigger) {
         if (fileSearchTrigger > 0) fileSearchOpen = true
+    }
+
+    // Bottom tab selection (Commit by default). Ctrl+Shift+F bumps findInFilesTrigger; we flip
+    // the bottom strip to Search and forward the trigger into SearchPanel so it requests focus
+    // on its input field.
+    var bottomTab by remember(projectPath) { mutableStateOf(BottomTab.Commit) }
+    var searchFieldFocusTrigger by remember(projectPath) { mutableStateOf(0) }
+    val searchQueryState = remember(rootPath) { TextFieldState() }
+    LaunchedEffect(findInFilesTrigger) {
+        if (findInFilesTrigger > 0) {
+            bottomTab = BottomTab.Search
+            searchFieldFocusTrigger += 1
+        }
     }
 
     // Tab-strip persistence: restore on project open, then debounce-save on every change. Saved
@@ -288,78 +303,96 @@ fun App(
                             )
                         },
                         second = {
-                            CommitPanel(
-                                status = status,
-                                stashes = stashes,
-                                selectedPaths = selectedPaths,
-                                onToggle = { path ->
-                                    selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
-                                },
-                                onChangeClick = { change ->
-                                    if (repo != null) {
-                                        tabsState.open(Tab.Diff(change, repo.rootDir.toFile()))
-                                    }
-                                },
-                                onCommit = { message, included ->
-                                    if (repo != null && !commitInFlight) {
-                                        scope.launch {
-                                            commitInFlight = true
-                                            try {
-                                                withContext(Dispatchers.IO) {
-                                                    repo.stageAndCommit(message, included)
+                            BottomTabs(
+                                selected = bottomTab,
+                                onSelect = { bottomTab = it },
+                                commit = {
+                                    CommitPanel(
+                                        status = status,
+                                        stashes = stashes,
+                                        selectedPaths = selectedPaths,
+                                        onToggle = { path ->
+                                            selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
+                                        },
+                                        onChangeClick = { change ->
+                                            if (repo != null) {
+                                                tabsState.open(Tab.Diff(change, repo.rootDir.toFile()))
+                                            }
+                                        },
+                                        onCommit = { message, included ->
+                                            if (repo != null && !commitInFlight) {
+                                                scope.launch {
+                                                    commitInFlight = true
+                                                    try {
+                                                        withContext(Dispatchers.IO) {
+                                                            repo.stageAndCommit(message, included)
+                                                        }
+                                                        reloadStatus()
+                                                    } finally {
+                                                        commitInFlight = false
+                                                    }
                                                 }
-                                                reloadStatus()
-                                            } finally {
-                                                commitInFlight = false
                                             }
-                                        }
-                                    }
-                                },
-                                onStash = { message ->
-                                    if (repo != null && !stashInFlight) {
-                                        scope.launch {
-                                            stashInFlight = true
-                                            try {
-                                                withContext(Dispatchers.IO) {
-                                                    repo.stashCreate(message.ifBlank { null })
+                                        },
+                                        onStash = { message ->
+                                            if (repo != null && !stashInFlight) {
+                                                scope.launch {
+                                                    stashInFlight = true
+                                                    try {
+                                                        withContext(Dispatchers.IO) {
+                                                            repo.stashCreate(message.ifBlank { null })
+                                                        }
+                                                        reloadStatus()
+                                                    } finally {
+                                                        stashInFlight = false
+                                                    }
                                                 }
-                                                reloadStatus()
-                                            } finally {
-                                                stashInFlight = false
                                             }
-                                        }
-                                    }
-                                },
-                                onPopStash = { entry ->
-                                    if (repo != null && !stashInFlight) {
-                                        scope.launch {
-                                            stashInFlight = true
-                                            try {
-                                                withContext(Dispatchers.IO) { repo.stashPop(entry) }
-                                                reloadStatus()
-                                            } finally {
-                                                stashInFlight = false
+                                        },
+                                        onPopStash = { entry ->
+                                            if (repo != null && !stashInFlight) {
+                                                scope.launch {
+                                                    stashInFlight = true
+                                                    try {
+                                                        withContext(Dispatchers.IO) { repo.stashPop(entry) }
+                                                        reloadStatus()
+                                                    } finally {
+                                                        stashInFlight = false
+                                                    }
+                                                }
                                             }
-                                        }
-                                    }
-                                },
-                                onDropStash = { entry ->
-                                    if (repo != null && !stashInFlight) {
-                                        scope.launch {
-                                            stashInFlight = true
-                                            try {
-                                                withContext(Dispatchers.IO) { repo.stashDrop(entry) }
-                                                reloadStatus()
-                                            } finally {
-                                                stashInFlight = false
+                                        },
+                                        onDropStash = { entry ->
+                                            if (repo != null && !stashInFlight) {
+                                                scope.launch {
+                                                    stashInFlight = true
+                                                    try {
+                                                        withContext(Dispatchers.IO) { repo.stashDrop(entry) }
+                                                        reloadStatus()
+                                                    } finally {
+                                                        stashInFlight = false
+                                                    }
+                                                }
                                             }
-                                        }
-                                    }
+                                        },
+                                        commitInFlight = commitInFlight,
+                                        stashInFlight = stashInFlight,
+                                        refreshing = refreshing,
+                                        onRefresh = ::refresh,
+                                    )
                                 },
-                                commitInFlight = commitInFlight,
-                                stashInFlight = stashInFlight,
-                                refreshing = refreshing,
-                                onRefresh = ::refresh,
+                                search = {
+                                    SearchPanel(
+                                        projectRoot = rootPath,
+                                        files = fileIndex.files,
+                                        state = searchQueryState,
+                                        focusTrigger = searchFieldFocusTrigger,
+                                        onPick = { relPath, line ->
+                                            val absolute = File(rootPath.toFile(), relPath)
+                                            if (absolute.isFile) tabsState.openAt(Tab.FileView(absolute), line)
+                                        },
+                                    )
+                                },
                             )
                         },
                     )

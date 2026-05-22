@@ -137,7 +137,14 @@ fun TabbedViewerPanel(
                         )
                     }
                 }
-                is Tab.Diff -> if (repo != null) DiffView(repo, current)
+                is Tab.Diff -> if (repo != null) DiffView(
+                    repo = repo,
+                    tab = current,
+                    editStore = editStore,
+                    onFileSaved = onFileSaved,
+                    onResolveAt = onResolveAt,
+                    onJump = onJump,
+                )
                 is Tab.History -> if (repo != null) HistoryView(repo, current)
                 is Tab.LauncherOutput -> LauncherOutputView(current)
                 null -> {}

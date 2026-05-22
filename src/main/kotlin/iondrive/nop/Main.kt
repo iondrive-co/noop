@@ -11,6 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.DpSize
@@ -213,6 +215,9 @@ private fun ApplicationScope.ProjectWindow(
     // onPreviewKeyEvent so it fires regardless of which child (tree, editor, …) has focus.
     val shiftDetector = remember { DoubleShiftDetector() }
     var fileSearchTrigger by remember { mutableStateOf(0) }
+    // Ctrl+Shift+F focuses the bottom "Find in files" tab — same window-level wiring as the
+    // double-shift detector so it works from any focused child.
+    var findInFilesTrigger by remember { mutableStateOf(0) }
 
     Window(
         state = windowState,
@@ -229,6 +234,12 @@ private fun ApplicationScope.ProjectWindow(
                 else -> false
             }
             if (fired) fileSearchTrigger += 1
+            if (event.type == KeyEventType.KeyDown &&
+                event.isCtrlPressed && event.isShiftPressed && event.key == Key.F
+            ) {
+                findInFilesTrigger += 1
+                return@Window true
+            }
             // Never consume — the underlying field/tree still needs to see the key.
             false
         },
@@ -248,6 +259,7 @@ private fun ApplicationScope.ProjectWindow(
                 onPickNew = onPickNew,
                 onToggleTheme = onToggleTheme,
                 fileSearchTrigger = fileSearchTrigger,
+                findInFilesTrigger = findInFilesTrigger,
             )
         }
     }
