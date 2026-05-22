@@ -19,7 +19,7 @@ README_MARKER="<!-- screenshot -->"
 
 mkdir -p "$SHOT_DIR"
 
-for cmd in wmctrl xdotool import convert; do
+for cmd in wmctrl xdotool xwininfo import convert; do
     if ! command -v "$cmd" >/dev/null; then
         echo "missing required tool: $cmd" >&2
         exit 1
@@ -34,8 +34,20 @@ if [ -z "$wid" ]; then
     exit 2
 fi
 
-eval "$(DISPLAY="$DISPLAY_SPEC" xdotool getwindowgeometry --shell "$wid")"
 DISPLAY="$DISPLAY_SPEC" xdotool windowactivate --sync "$wid"
+
+# xdotool's getwindowgeometry returns the WM-hinted origin, which on xfwm4 doesn't match
+# the actual on-screen position of the client area. xwininfo reads from the X server
+# directly and reports the client's absolute coordinates, which is what `import -window`
+# captures and what `xdotool mousemove` consumes — so everything stays in one coord
+# space when we drive it from xwininfo.
+read X Y WIDTH HEIGHT < <(DISPLAY="$DISPLAY_SPEC" xwininfo -id "$wid" | awk '
+    /Absolute upper-left X:/ {x=$NF}
+    /Absolute upper-left Y:/ {y=$NF}
+    /Width:/  {w=$NF}
+    /Height:/ {h=$NF}
+    END {print x, y, w, h}
+')
 
 # Park the cursor off-window between actions so the pointer doesn't leak into the shot.
 park_cursor() {
@@ -48,7 +60,13 @@ theme_x=$((X + WIDTH - 18))
 theme_y=$((Y + HEIGHT - 18))
 
 click_theme_toggle() {
-    DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$theme_x" "$theme_y" click 1
+    DISPLAY="$DISPLAY_SPEC" xdotool windowactivate --sync "$wid"
+    # Move and click as separate calls: chaining `mousemove X Y click 1` in one invocation
+    # races with xfwm4 under our test harness — the click sometimes fires before the move
+    # has settled, missing the 16dp IconButton hitbox.
+    DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$theme_x" "$theme_y"
+    sleep 0.2
+    DISPLAY="$DISPLAY_SPEC" xdotool click 1
     park_cursor
     # The IntUi theme swap involves a recomposition + style cache rebuild — give Skia a
     # few frames to settle so we don't snap a half-repainted intermediate.
@@ -72,30 +90,44 @@ diff_out="$SHOT_DIR/${ts}-diff.png"
 preview_out="$SHOT_DIR/${ts}-preview.png"
 
 # --- Screenshot 1: diff view ---
-# Synthesize a click on the first row of the bottom commit panel. The layout uses a
+# Synthesize a click on a row of the bottom commit panel. The layout uses a
 # 0.55 vertical split with the commit panel below — see App.kt's rememberSplitLayoutState.
 # Inside the panel: header row + message box (64dp) + button strip + paddings stack up
-# to ~126px before the change list. Add half a row to centre on the first change.
+# to ~126px before the change list. Rows are ~28px tall.
+#
+# We target the THIRD change row instead of the first because the first two are often
+# the screenshots themselves (this script's own outputs are versioned, and overwriting
+# them shows up as a change immediately) and a PNG diff renders as "Loading diff…" in
+# nop's text-only diff view. Skipping to row 3 lands on something diffable.
 panel_top=$((Y + HEIGHT * 55 / 100))
 diff_x=$((X + WIDTH * 30 / 100))
-diff_y=$((panel_top + 126))
+diff_y=$((panel_top + 126 + 56))
 DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$diff_x" "$diff_y" click 1
 park_cursor
-sleep 0.4
+# Give the diff machinery a moment to compute + lay out — PNGs are quick to bail and
+# Kotlin diffs over a few hundred lines take a beat.
+sleep 1.0
 capture_to "$diff_out"
 
 # --- Theme toggle so the second shot lands in the opposite mode ---
 click_theme_toggle
 
 # --- Screenshot 2: README rendered-markdown preview ---
-# Tree rows are ~24px tall. With the nop repo open, the layout is: root (y=54), four
-# ignored-aware directories (docs, gradle, scripts, src at y=78,102,126,150), then files
-# alphabetically — build.gradle.kts, gradle.properties, gradlew, gradlew.bat, README.md
-# (the 5th file, y=270). Adjust readme_y if you reshape the repo or test with a different
-# project; this script is tuned for capturing nop's own README in the nop repo.
-tree_x=$((X + 80))
-readme_y=$((Y + 270))
-DISPLAY="$DISPLAY_SPEC" xdotool mousemove "$tree_x" "$readme_y" click 1
+# Use nop's own double-shift file-search dialog to jump straight to README.md. This
+# avoids brittle pixel arithmetic against the tree, which shifts when ancestors get
+# auto-expanded by the diff click above.
+#
+# Pointedly NOT using xdotool's `--window` flag here: that path goes via XSendEvent
+# and Compose's key listeners don't fire on synthetic events. Without --window the
+# focused window receives the keys naturally.
+DISPLAY="$DISPLAY_SPEC" xdotool windowactivate --sync "$wid"
+DISPLAY="$DISPLAY_SPEC" xdotool key shift
+sleep 0.05
+DISPLAY="$DISPLAY_SPEC" xdotool key shift
+sleep 0.3
+DISPLAY="$DISPLAY_SPEC" xdotool type --delay 20 "README"
+sleep 0.3
+DISPLAY="$DISPLAY_SPEC" xdotool key Return
 park_cursor
 sleep 0.6
 capture_to "$preview_out"

@@ -34,6 +34,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.foundation.theme.JewelTheme
@@ -161,6 +162,25 @@ fun App(
     // so the dialog doesn't pop on first composition.
     LaunchedEffect(fileSearchTrigger) {
         if (fileSearchTrigger > 0) fileSearchOpen = true
+    }
+
+    // Tab-strip persistence: restore on project open, then debounce-save on every change. Saved
+    // alongside the symbol/file indexes under the project's data dir. Restore happens before
+    // we subscribe to changes, and we drop the first emission so the restore itself doesn't
+    // immediately trigger a no-op save.
+    val tabsFile = remember(rootPath) { Settings.projectDataDir(rootPath).resolve("tabs.tsv") }
+    LaunchedEffect(rootPath, tabsState) {
+        val saved = withContext(Dispatchers.IO) { TabsPersistence.load(tabsFile) }
+        TabsPersistence.restore(tabsState, saved, repo?.rootDir?.toFile())
+        snapshotFlow { tabsState.tabs.map { it.id } to tabsState.selectedId }
+            .drop(1)
+            .debounce(500)
+            .distinctUntilChanged()
+            .collectLatest {
+                val snapshotTabs = tabsState.tabs.toList()
+                val selectedId = tabsState.selectedId
+                withContext(Dispatchers.IO) { TabsPersistence.save(tabsFile, snapshotTabs, selectedId) }
+            }
     }
 
     // Close any open tabs that point at the given file or anything under it (when it's a dir).

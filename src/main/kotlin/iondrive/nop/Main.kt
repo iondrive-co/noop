@@ -217,7 +217,9 @@ private fun ApplicationScope.ProjectWindow(
     Window(
         state = windowState,
         onCloseRequest = onCloseWindow,
-        title = projectPath.fileName.toString(),
+        // Title carries both the app and the project so taskbars are scannable across many
+        // open windows. scripts/screenshot.sh greps for "nop — " to find a running instance.
+        title = "nop — ${projectPath.fileName}",
         icon = windowIcon,
         onPreviewKeyEvent = { event ->
             val isShift = event.key == Key.ShiftLeft || event.key == Key.ShiftRight

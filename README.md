@@ -27,4 +27,5 @@ Ctrl click on an element in a file to jump to source.
 <!-- screenshot -->
 ![Diff view](docs/screenshots/latest-diff.png)
 ![README preview](docs/screenshots/latest-preview.png)
+*Captured 2026-05-22 19:04:07 — light & dark mode toggled via the header button*
 <!-- screenshot -->

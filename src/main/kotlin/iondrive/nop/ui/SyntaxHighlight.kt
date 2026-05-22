@@ -78,7 +78,9 @@ fun highlightTransformation(
     applyTokens(this, tokenize(asCharSequence().toString()), palette)
 }
 
-private fun applyTokens(buffer: TextFieldBuffer, tokens: List<Token>, palette: HighlightPalette) {
+/** Apply [tokens] to [buffer] with [palette]'s styles. Exposed so the editor can chain it with
+ *  ad-hoc spans (hover underline, etc.) inside a single [OutputTransformation]. */
+internal fun applyTokens(buffer: TextFieldBuffer, tokens: List<Token>, palette: HighlightPalette) {
     val len = buffer.length
     for (t in tokens) {
         val s = t.start.coerceIn(0, len)

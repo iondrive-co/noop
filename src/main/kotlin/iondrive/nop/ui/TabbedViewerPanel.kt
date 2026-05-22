@@ -29,13 +29,17 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.text.input.OutputTransformation
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import iondrive.nop.git.GitRepo
+import iondrive.nop.index.JumpResolver
 import iondrive.nop.index.JumpTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -197,7 +201,21 @@ private fun FileEditView(
     val fg = if (isDark) androidx.compose.ui.graphics.Color(0xFFA9B7C6) else androidx.compose.ui.graphics.Color(0xFF1F2329)
     val palette = if (isDark) HighlightPalette.Dark else HighlightPalette.Light
     val tokenize = remember(tab.id) { tokenizerForExtension(tab.file.extension) }
-    val transformation = remember(tokenize, palette) { tokenize?.let { highlightTransformation(it, palette) } }
+
+    // Range of the word currently under the mouse pointer while Ctrl is held *and* the symbol
+    // index resolves the word to a jump target. Drawn as an underline so the user knows the
+    // click will hand them off to another file. Inclusive on both ends (matches JumpResolver).
+    var hoverUnderline by remember(tab.id) { mutableStateOf<IntRange?>(null) }
+    val transformation = remember(tokenize, palette, hoverUnderline) {
+        OutputTransformation {
+            val text = asCharSequence().toString()
+            tokenize?.let { applyTokens(this, it(text), palette) }
+            val range = hoverUnderline
+            if (range != null && range.first in 0 until length && range.last in 0 until length) {
+                addStyle(SpanStyle(textDecoration = TextDecoration.Underline), range.first, range.last + 1)
+            }
+        }
+    }
 
     // We keep the text layout around so Ctrl-click can map mouse coordinates to text offsets,
     // and so an inbound jump request can scroll a target line to the top of the viewport.
@@ -230,22 +248,41 @@ private fun FileEditView(
                 .fillMaxSize()
                 .padding(end = 12.dp)
                 .focusRequester(focusRequester)
-                // Ctrl-click → jump-to-source. We run on the Initial pass and consume the change
-                // when we have a target, so the field doesn't also move the cursor to the click
-                // site. Bare clicks fall through unchanged and place the cursor as usual.
+                // Ctrl-click → jump-to-source, and Ctrl-hover → underline the jumpable word so
+                // the user can see the click target before commiting. Both run on the Initial
+                // pass; only Press consumes its change so cursor placement on bare clicks keeps
+                // working. Moves never consume, otherwise the field's own selection-by-drag
+                // would break.
                 .pointerInput(tab.id) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
-                            if (event.type != PointerEventType.Press) continue
-                            if (!event.keyboardModifiers.isCtrlPressed) continue
-                            val change = event.changes.firstOrNull() ?: continue
-                            val tl = layout ?: continue
-                            val offset = tl.getOffsetForPosition(change.position)
-                            val target = resolveCallback(edit.state.text.toString(), offset)
-                            if (target != null) {
-                                change.consume()
-                                jumpCallback(target.file, target.line)
+                            val ctrl = event.keyboardModifiers.isCtrlPressed
+                            val change = event.changes.firstOrNull()
+                            val tl = layout
+
+                            // Maintain the hover underline on every event: clear it whenever
+                            // Ctrl is released, the pointer leaves the field, or the resolved
+                            // target disappears (cursor moved off the word).
+                            if (event.type == PointerEventType.Exit || !ctrl || change == null || tl == null) {
+                                hoverUnderline = null
+                            } else {
+                                val text = edit.state.text.toString()
+                                val offset = tl.getOffsetForPosition(change.position)
+                                hoverUnderline = if (resolveCallback(text, offset) != null) {
+                                    JumpResolver.wordRangeAt(text, offset)
+                                } else {
+                                    null
+                                }
+                            }
+
+                            if (event.type == PointerEventType.Press && ctrl && change != null && tl != null) {
+                                val offset = tl.getOffsetForPosition(change.position)
+                                val target = resolveCallback(edit.state.text.toString(), offset)
+                                if (target != null) {
+                                    change.consume()
+                                    jumpCallback(target.file, target.line)
+                                }
                             }
                         }
                     }

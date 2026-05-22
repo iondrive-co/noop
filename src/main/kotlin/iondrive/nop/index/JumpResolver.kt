@@ -13,13 +13,19 @@ object JumpResolver {
      * names and template filenames (`adn-deploy-tool`) and we want those to round-trip.
      */
     fun wordAt(text: String, offset: Int): String? {
+        val range = wordRangeAt(text, offset) ?: return null
+        return text.substring(range.first, range.last + 1)
+    }
+
+    /** Half-open-style range covering the word under [offset], or null when on no word. */
+    fun wordRangeAt(text: String, offset: Int): IntRange? {
         if (offset < 0 || offset > text.length) return null
         var start = offset
         while (start > 0 && isWordChar(text[start - 1])) start--
         var end = offset
         while (end < text.length && isWordChar(text[end])) end++
         if (start == end) return null
-        return text.substring(start, end)
+        return start..(end - 1)
     }
 
     /**
