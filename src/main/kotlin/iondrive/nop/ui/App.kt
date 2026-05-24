@@ -225,6 +225,7 @@ fun App(
             val tabFile: File? = when (tab) {
                 is Tab.FileView -> tab.file
                 is Tab.Diff -> File(tab.repoRoot, tab.change.path)
+                is Tab.CommitDiff -> File(tab.repoRoot, tab.file.path)
                 is Tab.History -> tab.file
                 is Tab.LauncherOutput -> null
             }
@@ -250,6 +251,7 @@ fun App(
     val revealFile: File? = when (val t = tabsState.selectedTab) {
         is Tab.FileView -> t.file
         is Tab.Diff -> File(t.repoRoot, t.change.path)
+        is Tab.CommitDiff -> File(t.repoRoot, t.file.path)
         is Tab.History -> t.file
         is Tab.LauncherOutput, null -> null
     }

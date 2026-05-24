@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import iondrive.nop.git.CommitFile
 import iondrive.nop.git.FileChange
 import iondrive.nop.launchers.LauncherRun
 import java.io.File
@@ -27,6 +28,13 @@ sealed class Tab {
     data class History(val file: File, val repoRoot: File) : Tab() {
         override val id: String get() = "history:${file.absolutePath}"
         override val title: String get() = "⎇ ${file.name}"
+        var expandedSha: String? by mutableStateOf(null)
+    }
+
+    /** Diff of a single file within a historic commit (parent vs commit). */
+    data class CommitDiff(val sha: String, val shortSha: String, val file: CommitFile, val repoRoot: File) : Tab() {
+        override val id: String get() = "commitdiff:$sha:${file.path}"
+        override val title: String get() = "$shortSha ${File(file.path).name}"
     }
 
     /** A live launcher invocation — output streams here while the process runs. */

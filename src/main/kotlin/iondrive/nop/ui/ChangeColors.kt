@@ -22,8 +22,8 @@ object ChangeColors {
         ChangeKind.MODIFIED -> "M"
         ChangeKind.ADDED -> "A"
         ChangeKind.REMOVED -> "D"
-        ChangeKind.UNTRACKED -> "?"
-        ChangeKind.MISSING -> "!"
+        ChangeKind.UNTRACKED -> "U"
+        ChangeKind.MISSING -> "D"
         ChangeKind.CONFLICT -> "C"
     }
 }

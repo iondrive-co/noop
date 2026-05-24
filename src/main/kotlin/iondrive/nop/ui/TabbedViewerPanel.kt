@@ -161,7 +161,8 @@ fun TabbedViewerPanel(
                     onResolveAt = onResolveAt,
                     onJump = onJump,
                 )
-                is Tab.History -> if (repo != null) HistoryView(repo, current)
+                is Tab.History -> if (repo != null) HistoryView(repo, current, tabsState)
+                is Tab.CommitDiff -> if (repo != null) CommitDiffView(repo, current)
                 is Tab.LauncherOutput -> LauncherOutputView(current)
                 null -> {}
             }
@@ -177,6 +178,7 @@ private fun labelFor(tab: Tab, editStore: FileEditStore): String = when (tab) {
         if (edit != null && edit.isModified) "*$base" else base
     }
     is Tab.Diff -> tab.title
+    is Tab.CommitDiff -> tab.title
     is Tab.History -> tab.title
     is Tab.LauncherOutput -> tab.title
 }

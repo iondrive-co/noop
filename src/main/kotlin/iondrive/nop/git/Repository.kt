@@ -1,10 +1,15 @@
 package iondrive.nop.git
 
 import org.eclipse.jgit.api.Git
+import org.eclipse.jgit.diff.DiffEntry
+import org.eclipse.jgit.diff.DiffFormatter
 import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.revwalk.RevWalk
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder
+import org.eclipse.jgit.treewalk.EmptyTreeIterator
+import org.eclipse.jgit.treewalk.CanonicalTreeParser
 import org.eclipse.jgit.treewalk.TreeWalk
+import org.eclipse.jgit.util.io.DisabledOutputStream
 import java.io.File
 import java.nio.file.Path
 
@@ -78,10 +83,13 @@ class GitRepo(val rootDir: Path, private val repository: Repository) : AutoClose
     }
 
     /** File content at HEAD for the given repo-relative path, or null if the path is absent from HEAD. */
-    fun readHeadContent(relPath: String): String? {
-        val head = repository.resolve("HEAD") ?: return null
+    fun readHeadContent(relPath: String): String? = readContentAt("HEAD", relPath)
+
+    /** File content at an arbitrary revision for the given repo-relative path. */
+    fun readContentAt(rev: String, relPath: String): String? {
+        val objectId = repository.resolve(rev) ?: return null
         RevWalk(repository).use { walk ->
-            val commit = walk.parseCommit(head)
+            val commit = walk.parseCommit(objectId)
             TreeWalk.forPath(repository, relPath, commit.tree)?.use { tw ->
                 val blobId = tw.getObjectId(0)
                 val loader = repository.open(blobId)
@@ -105,6 +113,40 @@ class GitRepo(val rootDir: Path, private val repository: Repository) : AutoClose
                 whenEpochSeconds = c.commitTime.toLong(),
                 shortMessage = c.shortMessage ?: "",
             )
+        }
+    }
+
+    /** Files changed in a single commit, compared against its first parent (or the empty tree for root commits). */
+    fun commitFiles(sha: String): List<CommitFile> {
+        RevWalk(repository).use { walk ->
+            val commit = walk.parseCommit(repository.resolve(sha))
+            val reader = repository.newObjectReader()
+            val newTree = CanonicalTreeParser().apply { reset(reader, commit.tree) }
+            val oldTree = if (commit.parentCount > 0) {
+                val parent = walk.parseCommit(commit.getParent(0))
+                CanonicalTreeParser().apply { reset(reader, parent.tree) }
+            } else null
+
+            val formatter = DiffFormatter(DisabledOutputStream.INSTANCE)
+            formatter.setRepository(repository)
+            val diffs = if (oldTree != null) {
+                formatter.scan(oldTree, newTree)
+            } else {
+                formatter.scan(EmptyTreeIterator(), newTree)
+            }
+            return diffs.map { d ->
+                CommitFile(
+                    path = (d.newPath.takeIf { it != DiffEntry.DEV_NULL } ?: d.oldPath),
+                    changeType = when (d.changeType) {
+                        DiffEntry.ChangeType.ADD -> CommitFileChange.ADDED
+                        DiffEntry.ChangeType.DELETE -> CommitFileChange.DELETED
+                        DiffEntry.ChangeType.MODIFY -> CommitFileChange.MODIFIED
+                        DiffEntry.ChangeType.RENAME -> CommitFileChange.RENAMED
+                        DiffEntry.ChangeType.COPY -> CommitFileChange.COPIED
+                        else -> CommitFileChange.MODIFIED
+                    },
+                )
+            }
         }
     }
 

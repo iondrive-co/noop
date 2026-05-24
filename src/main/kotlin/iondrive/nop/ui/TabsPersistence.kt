@@ -29,7 +29,7 @@ object TabsPersistence {
             val (kind, file) = when (tab) {
                 is Tab.FileView -> KIND_FILE to tab.file
                 is Tab.History -> KIND_HISTORY to tab.file
-                is Tab.Diff, is Tab.LauncherOutput -> return@mapNotNull null
+                is Tab.Diff, is Tab.CommitDiff, is Tab.LauncherOutput -> return@mapNotNull null
             }
             val selected = tab.id == selectedId
             "$kind\t${file.absolutePath}\t${if (selected) "1" else "0"}"

@@ -44,3 +44,7 @@ data class GitStatus(
         val EMPTY = GitStatus(branch = null, changes = emptyList())
     }
 }
+
+enum class CommitFileChange { ADDED, DELETED, MODIFIED, RENAMED, COPIED }
+
+data class CommitFile(val path: String, val changeType: CommitFileChange)
