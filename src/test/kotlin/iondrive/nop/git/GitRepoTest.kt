@@ -182,6 +182,26 @@ class GitRepoTest {
         assertTrue(status.isClean, "expected clean, got ${status.changes}")
     }
 
+    @Test
+    fun `loadStatus picks up files added after an earlier snapshot`(@TempDir tmp: Path) {
+        runShell(tmp, "git init -q && git config user.email t@x && git config user.name T")
+        (tmp / "a.txt").writeText("a\n")
+        runShell(tmp, "git add -A && git commit -q -m init")
+        (tmp / "a.txt").writeText("modified\n")
+
+        val repo = GitRepo.discover(tmp)!!
+        val snapshot = repo.loadStatus()
+        assertEquals(setOf("a.txt"), snapshot.byPath.keys, "only a.txt known at snapshot time")
+
+        // New file appears after the snapshot (simulates working while nop hasn't refreshed)
+        (tmp / "b.txt").writeText("new\n")
+
+        val fresh = repo.loadStatus()
+        val newPaths = fresh.changes.map { it.path }.toSet() - snapshot.changes.map { it.path }.toSet()
+        assertEquals(setOf("b.txt"), newPaths, "fresh load must detect the newly appeared file")
+        repo.close()
+    }
+
     private operator fun Path.div(name: String): Path = resolve(name)
 
     private fun runShell(cwd: Path, cmd: String) {

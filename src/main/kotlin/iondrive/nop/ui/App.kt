@@ -346,10 +346,23 @@ fun App(
                                                 scope.launch {
                                                     commitInFlight = true
                                                     try {
-                                                        withContext(Dispatchers.IO) {
-                                                            repo.stageAndCommit(message, included)
+                                                        // Refresh before committing: if new unreviewed
+                                                        // changes appeared since the last load, show them
+                                                        // and let the user decide rather than silently
+                                                        // committing a partial snapshot.
+                                                        val fresh = withContext(Dispatchers.IO) { repo.loadStatus() }
+                                                        val knownPaths = status.changes.map { it.path }.toSet()
+                                                        val newPaths = fresh.changes.map { it.path }.toSet() - knownPaths
+                                                        if (newPaths.isNotEmpty()) {
+                                                            status = fresh
+                                                            selectedPaths = fresh.changes.map { it.path }.toSet()
+                                                            fsRefreshKey += 1
+                                                        } else {
+                                                            withContext(Dispatchers.IO) {
+                                                                repo.stageAndCommit(message, included)
+                                                            }
+                                                            reloadStatus()
                                                         }
-                                                        reloadStatus()
                                                     } finally {
                                                         commitInFlight = false
                                                     }
