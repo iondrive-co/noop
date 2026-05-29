@@ -6,6 +6,7 @@ import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -152,5 +153,43 @@ class IndexerTest {
 
     @Test fun `wordAt returns null in whitespace`() {
         assertNull(JumpResolver.wordAt("  ", 1))
+    }
+
+    // Fixed epoch-millis timestamps keep these independent of the real clock: PAST < cache < EDIT.
+    private val past = 1_000_000_000L
+    private val cacheStamp = 2_000_000_000L
+    private val future = 3_000_000_000L
+
+    @Test fun `isStale is false when nothing changed since the cache`(@TempDir tmp: Path) {
+        tmp.resolve("a.kt").writeText("val a = 1\n")
+        val b = tmp.resolve("sub/b.kt"); b.parent.createDirectories(); b.writeText("val b = 2\n")
+        tmp.toFile().walkTopDown().forEach { it.setLastModified(past) }
+        assertFalse(Indexer.isStale(tmp, since = cacheStamp, cachedFileCount = 2))
+    }
+
+    @Test fun `isStale is true after a file is edited`(@TempDir tmp: Path) {
+        val a = tmp.resolve("a.kt"); a.writeText("x\n")
+        tmp.toFile().walkTopDown().forEach { it.setLastModified(past) }
+        a.toFile().setLastModified(future) // edited after the cache was written
+        assertTrue(Indexer.isStale(tmp, since = cacheStamp, cachedFileCount = 1))
+    }
+
+    @Test fun `isStale is true when the file count grew`(@TempDir tmp: Path) {
+        tmp.resolve("a.kt").writeText("x\n")
+        tmp.resolve("b.kt").writeText("y\n")
+        tmp.toFile().walkTopDown().forEach { it.setLastModified(past) }
+        // The cache only knew about one file; a second appeared without bumping mtimes.
+        assertTrue(Indexer.isStale(tmp, since = cacheStamp, cachedFileCount = 1))
+    }
+
+    @Test fun `isStale ignores churn inside ignored dirs`(@TempDir tmp: Path) {
+        tmp.resolve("a.kt").writeText("x\n")
+        val junk = tmp.resolve("node_modules/pkg/index.js")
+        junk.parent.createDirectories(); junk.writeText("garbage\n")
+        tmp.toFile().walkTopDown().forEach { it.setLastModified(past) }
+        // A freshly-touched file under node_modules must not count as a project change.
+        junk.toFile().setLastModified(future)
+        junk.parent.toFile().setLastModified(future)
+        assertFalse(Indexer.isStale(tmp, since = cacheStamp, cachedFileCount = 1))
     }
 }

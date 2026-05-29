@@ -33,6 +33,7 @@ import iondrive.nop.launchers.LauncherStore
 import iondrive.nop.launchers.discoverLaunchers
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -41,7 +42,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
+
+// How often the commit panel re-checks git state on its own, so changes from editing, branch
+// switches, or external git commands show up without hitting Refresh.
+private const val GIT_POLL_INTERVAL_MS = 3_000L
 
 @OptIn(FlowPreview::class)
 @Composable
@@ -117,6 +123,25 @@ fun App(
         }
     }
 
+    // Gentle background poll. Unlike reloadStatus() it preserves the user's commit selection —
+    // only dropping paths that vanished and auto-selecting changes that newly appeared — and it
+    // touches no state (so no recomposition, no tree re-walk) when git state is unchanged. It
+    // also stands down while a commit/stash/manual-refresh is in flight so it can't clobber them.
+    suspend fun pollStatus() {
+        if (repo == null || commitInFlight || stashInFlight || refreshing) return
+        val fresh = withContext(Dispatchers.IO) { runCatching { repo.loadStatus() }.getOrNull() } ?: return
+        val freshStashes = withContext(Dispatchers.IO) { runCatching { repo.stashList() }.getOrDefault(stashes) }
+        if (fresh == status && freshStashes == stashes) return
+        val previousPaths = status.changes.map { it.path }.toSet()
+        val freshPaths = fresh.changes.map { it.path }.toSet()
+        val appeared = freshPaths - previousPaths
+        // Keep selections the user still cares about, drop vanished ones, default-select new ones.
+        selectedPaths = (selectedPaths intersect freshPaths) + appeared
+        status = fresh
+        stashes = freshStashes
+        fsRefreshKey += 1
+    }
+
     val rootPath = repo?.rootDir ?: projectPath
     // Jump-to-source index: load the previous run's cache for instant clicks while we rebuild,
     // then swap in the fresh version (and persist it) once the walk finishes. The index lives
@@ -130,6 +155,20 @@ fun App(
         if (cachedSymbols.size > 0) symbolIndex = cachedSymbols
         val cachedFiles = withContext(Dispatchers.IO) { FileIndex.load(filesIndexFile) }
         if (cachedFiles.files.isNotEmpty()) fileIndex = cachedFiles
+
+        // Skip the full rebuild (walk + read + regex every file) when the on-disk cache is still
+        // fresh — i.e. nothing under the project changed since the cache was written. The
+        // freshness probe is a stat-only walk, far cheaper than a rebuild, so a project that
+        // hasn't changed since last open pays almost nothing on startup.
+        val cacheReady = cachedSymbols.size > 0 && cachedFiles.files.isNotEmpty()
+        val cacheStamp = withContext(Dispatchers.IO) {
+            runCatching { Files.getLastModifiedTime(filesIndexFile).toMillis() }.getOrDefault(0L)
+        }
+        val cacheFresh = cacheReady && cacheStamp > 0L && withContext(Dispatchers.IO) {
+            !Indexer.isStale(rootPath, cacheStamp, cachedFiles.files.size)
+        }
+        if (cacheFresh) return@LaunchedEffect
+
         val freshSymbols = withContext(Dispatchers.IO) { Indexer.build(rootPath) }
         symbolIndex = freshSymbols
         val freshFiles = withContext(Dispatchers.IO) { FileIndex.build(rootPath) }
@@ -160,7 +199,13 @@ fun App(
         refresh()
     }
 
-    LaunchedEffect(repo) { reloadStatus() }
+    LaunchedEffect(repo) {
+        reloadStatus()
+        while (true) {
+            delay(GIT_POLL_INTERVAL_MS)
+            pollStatus()
+        }
+    }
 
     // Open the search popup whenever Main bumps the trigger (double-Shift). Skip the initial 0
     // so the dialog doesn't pop on first composition.

@@ -275,6 +275,15 @@ private fun FileEditView(
     val fg = if (isDark) androidx.compose.ui.graphics.Color(0xFFA9B7C6) else androidx.compose.ui.graphics.Color(0xFF1F2329)
     val palette = if (isDark) HighlightPalette.Dark else HighlightPalette.Light
     val tokenize = remember(tab.id) { tokenizerForExtension(tab.file.extension) }
+    // Tokenize once per text change, not on every OutputTransformation invocation. The
+    // transformation below is re-applied on each recomposition (every keystroke, every
+    // Ctrl-hover that moves the underline), and re-running the regex sweep + per-call
+    // BooleanArray(text.length) there was the editor's main typing-latency cost. Caching the
+    // token list in a derivedStateOf keyed on the text means the heavy pass runs once per edit
+    // and the transformation body is just a cheap span-application.
+    val tokens by remember(tab.id, tokenize) {
+        derivedStateOf { tokenize?.invoke(edit.state.text.toString()) ?: emptyList() }
+    }
 
     // Range of the word currently under the mouse pointer while Ctrl is held *and* the symbol
     // index resolves the word to a jump target. Drawn as an underline so the user knows the
@@ -282,10 +291,9 @@ private fun FileEditView(
     var hoverUnderline by remember(tab.id) { mutableStateOf<IntRange?>(null) }
     val matchHighlight = if (isDark) Color(0xFF5A4A20) else Color(0xFFFFF38C)
     val activeMatchHighlight = if (isDark) Color(0xFF8A6D1A) else Color(0xFFFFB74D)
-    val transformation = remember(tokenize, palette, hoverUnderline, matches, currentMatch, matchHighlight, activeMatchHighlight) {
+    val transformation = remember(tokens, palette, hoverUnderline, matches, currentMatch, matchHighlight, activeMatchHighlight) {
         OutputTransformation {
-            val text = asCharSequence().toString()
-            tokenize?.let { applyTokens(this, it(text), palette) }
+            applyTokens(this, tokens, palette)
             val range = hoverUnderline
             if (range != null && range.first in 0 until length && range.last in 0 until length) {
                 addStyle(SpanStyle(textDecoration = TextDecoration.Underline), range.first, range.last + 1)

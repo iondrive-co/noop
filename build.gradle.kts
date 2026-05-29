@@ -55,6 +55,11 @@ compose.desktop {
             languageVersion = JavaLanguageVersion.of(21)
         }.get().metadata.installationPath.asFile.absolutePath
 
+        // A desktop editor never needs the JVM default max heap (¼ of RAM — ~15 GB on a 62 GB
+        // box). The live heap sits around 60 MB even with several windows open, so cap it as a
+        // runaway guard. String dedup reclaims the many identical strings the index produces
+        // (repeated file paths, symbol names); it requires G1, which is already the default GC.
+        jvmArgs += listOf("-Xmx512m", "-XX:+UseStringDeduplication")
 
         nativeDistributions {
             targetFormats(TargetFormat.AppImage, TargetFormat.Deb, TargetFormat.Dmg, TargetFormat.Msi)

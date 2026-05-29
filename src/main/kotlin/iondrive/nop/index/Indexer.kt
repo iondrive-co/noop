@@ -28,6 +28,44 @@ object Indexer {
         return SymbolIndex(out)
     }
 
+    /**
+     * Cheap "did the tree change since the cache was written" probe so callers can skip the full
+     * [build] (which reads + regexes every file) when nothing has moved. This walk only stats
+     * entries — no file contents are read.
+     *
+     * Returns true (stale) as soon as it sees evidence of a change:
+     *  - a file modified after [since] (an edit),
+     *  - a directory modified after [since] (an add / remove / rename bumps the parent's mtime),
+     *  - a file count that differs from [cachedFileCount] (a safety net for add/remove).
+     *
+     * [since] is epoch millis — pass the cache file's last-modified time. A pure deletion that
+     * leaves mtimes untouched on a filesystem that doesn't update directory mtimes is the one
+     * case this can miss; the manual Refresh and the next real change both recover from it.
+     */
+    fun isStale(projectRoot: Path, since: Long, cachedFileCount: Int): Boolean {
+        val rootFile = projectRoot.toAbsolutePath().normalize().toFile()
+        if (!rootFile.isDirectory) return true
+        var count = 0
+        val stack = ArrayDeque<File>()
+        stack.addLast(rootFile)
+        while (stack.isNotEmpty()) {
+            val dir = stack.removeLast()
+            val children = dir.listFiles() ?: continue
+            for (f in children) {
+                if (f.name in IGNORED_DIR_NAMES || f.isHidden) continue
+                if (f.isDirectory) {
+                    if (f.lastModified() > since) return true
+                    stack.addLast(f)
+                } else if (f.isFile) {
+                    if (f.lastModified() > since) return true
+                    count++
+                    if (count > cachedFileCount) return true
+                }
+            }
+        }
+        return count != cachedFileCount
+    }
+
     private fun walk(root: File, dir: File, out: MutableList<IndexEntry>) {
         val files = dir.listFiles() ?: return
         for (f in files) {
